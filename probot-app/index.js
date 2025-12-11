@@ -53,129 +53,138 @@ async function getPrFiles(context, owner, repo, prNumber) {
   return files;
 }
 
-// 🔒 helper: ignore events coming from bots (including this GitHub App)
+// ignore events from bots (your app, dependabot, etc.)
 function isFromBot(context) {
   const sender = context.payload.sender;
   if (!sender) return false;
-
-  // GitHub marks app users as type "Bot" and login like "my-app[bot]"
   if (sender.type === "Bot") return true;
   if (sender.login && sender.login.endsWith("[bot]")) return true;
-
   return false;
 }
 
 module.exports = (app) => {
   // 1) Full review submitted (Approve / Request changes / Comment)
   app.on("pull_request_review.submitted", async (context) => {
-    // ⛔ don’t process reviews created by bots
-    if (isFromBot(context)) {
-      context.log("Skipping pull_request_review from bot sender.");
-      return;
+    try {
+      if (isFromBot(context)) {
+        context.log("Skipping pull_request_review from bot sender.");
+        return;
+      }
+
+      const review = context.payload.review;
+      const pr = context.payload.pull_request;
+      const repo = context.payload.repository;
+
+      const reviewBody = review.body || "";
+      if (!reviewBody.trim()) {
+        context.log("Review body empty, skipping.");
+        return;
+      }
+
+      const owner = repo.owner.login;
+      const repoName = repo.name;
+      const prNumber = pr.number;
+      const files = await getPrFiles(context, owner, repoName, prNumber);
+
+      const payloadForBackend = {
+        kind: "review",
+        review_body: reviewBody,
+        review_state: review.state,
+        comment_body: null,
+        comment_path: null,
+        comment_diff_hunk: null,
+        comment_position: null,
+        comment_id: null,
+        reviewer_login: review.user && review.user.login,
+        pr_number: prNumber,
+        pr_title: pr.title,
+        pr_body: pr.body,
+        pr_author_login: pr.user && pr.user.login,
+        repo_full_name: repo.full_name,
+        repo_owner: owner,
+        repo_name: repoName,
+        files
+      };
+
+      const commentBody = await callBackend(context, payloadForBackend);
+      if (!commentBody) return;
+
+      await context.octokit.issues.createComment({
+        owner,
+        repo: repoName,
+        issue_number: prNumber,
+        body: commentBody
+      });
+    } catch (err) {
+      context.log.error(
+        { err },
+        "Error while handling pull_request_review.submitted"
+      );
+      // don’t rethrow – we want Probot to return 200 instead of 500
     }
-
-    const review = context.payload.review;
-    const pr = context.payload.pull_request;
-    const repo = context.payload.repository;
-
-    const reviewBody = review.body || "";
-    if (!reviewBody.trim()) {
-      context.log("Review body empty, skipping.");
-      return;
-    }
-
-    const owner = repo.owner.login;
-    const repoName = repo.name;
-    const prNumber = pr.number;
-    const files = await getPrFiles(context, owner, repoName, prNumber);
-
-    const payloadForBackend = {
-      kind: "review",
-      review_body: reviewBody,
-      review_state: review.state,
-      comment_body: null,
-      comment_path: null,
-      comment_diff_hunk: null,
-      comment_position: null,
-      comment_id: null,
-      reviewer_login: review.user && review.user.login,
-      pr_number: prNumber,
-      pr_title: pr.title,
-      pr_body: pr.body,
-      pr_author_login: pr.user && pr.user.login,
-      repo_full_name: repo.full_name,
-      repo_owner: owner,
-      repo_name: repoName,
-      files
-    };
-
-    const commentBody = await callBackend(context, payloadForBackend);
-    if (!commentBody) return;
-
-    // “Reply” in conversation = normal issue comment on the PR
-    await context.octokit.issues.createComment({
-      owner,
-      repo: repoName,
-      issue_number: prNumber,
-      body: commentBody
-    });
   });
 
   // 2) Single inline comment on “Files changed”
   app.on("pull_request_review_comment.created", async (context) => {
-    // ⛔ don’t process inline comments created by bots (prevents infinite loop)
-    if (isFromBot(context)) {
-      context.log("Skipping pull_request_review_comment from bot sender.");
-      return;
+    try {
+      if (isFromBot(context)) {
+        context.log("Skipping pull_request_review_comment from bot sender.");
+        return;
+      }
+
+      const comment = context.payload.comment;
+      const pr = context.payload.pull_request;
+      const repo = context.payload.repository;
+
+      const commentBodyOriginal = comment.body || "";
+      if (!commentBodyOriginal.trim()) {
+        context.log("Inline comment body empty, skipping.");
+        return;
+      }
+
+      const owner = repo.owner.login;
+      const repoName = repo.name;
+      const prNumber = pr.number;
+      const files = await getPrFiles(context, owner, repoName, prNumber);
+
+      const payloadForBackend = {
+        kind: "review_comment",
+        review_body: null,
+        review_state: null,
+        comment_body: commentBodyOriginal,
+        comment_path: comment.path,
+        comment_diff_hunk: comment.diff_hunk,
+        comment_position: comment.position,
+        comment_id: comment.id,
+        reviewer_login: comment.user && comment.user.login,
+        pr_number: prNumber,
+        pr_title: pr.title,
+        pr_body: pr.body,
+        pr_author_login: pr.user && pr.user.login,
+        repo_full_name: repo.full_name,
+        repo_owner: owner,
+        repo_name: repoName,
+        files
+      };
+
+      const replyBody = await callBackend(context, payloadForBackend);
+      if (!replyBody) return;
+
+      await context.octokit.pulls.createReplyForReviewComment({
+        owner,
+        repo: repoName,
+        pull_number: prNumber,
+        comment_id: comment.id,
+        body: replyBody
+      });
+
+      context.log.info("Replied to inline review comment.");
+    } catch (err) {
+      context.log.error(
+        { err },
+        "Error while handling pull_request_review_comment.created"
+      );
+      // don’t rethrow
     }
-
-    const comment = context.payload.comment;
-    const pr = context.payload.pull_request;
-    const repo = context.payload.repository;
-
-    const commentBodyOriginal = comment.body || "";
-    if (!commentBodyOriginal.trim()) {
-      context.log("Inline comment body empty, skipping.");
-      return;
-    }
-
-    const owner = repo.owner.login;
-    const repoName = repo.name;
-    const prNumber = pr.number;
-    const files = await getPrFiles(context, owner, repoName, prNumber);
-
-    const payloadForBackend = {
-      kind: "review_comment",
-      review_body: null,
-      review_state: null,
-      comment_body: commentBodyOriginal,
-      comment_path: comment.path,
-      comment_diff_hunk: comment.diff_hunk,
-      comment_position: comment.position,
-      comment_id: comment.id, // important for reply
-      reviewer_login: comment.user && comment.user.login,
-      pr_number: prNumber,
-      pr_title: pr.title,
-      pr_body: pr.body,
-      pr_author_login: pr.user && pr.user.login,
-      repo_full_name: repo.full_name,
-      repo_owner: owner,
-      repo_name: repoName,
-      files
-    };
-
-    const replyBody = await callBackend(context, payloadForBackend);
-    if (!replyBody) return;
-
-    // Reply to that specific inline comment
-    await context.octokit.pulls.createReplyForReviewComment({
-      owner,
-      repo: repoName,
-      pull_number: prNumber,
-      comment_id: comment.id,
-      body: replyBody
-    });
-
-    context.log.info("Replied to inline review comment.");
   });
 };
