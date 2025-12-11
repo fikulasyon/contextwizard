@@ -1,66 +1,60 @@
 const axios = require("axios");
 
-async function sendToBackend(context, payloadForBackend) {
+async function callBackend(context, payloadForBackend) {
   const backendUrl = process.env.BACKEND_URL;
   if (!backendUrl) {
     context.log.error("BACKEND_URL is not set in environment variables");
-    return;
+    return null;
   }
 
   context.log.info("Sending payload to backend", payloadForBackend);
 
   try {
-    const response = await axios.post(backendUrl, payloadForBackend);
-    const backendData = response.data;
-
-    const commentBody = backendData.comment;
+    const res = await axios.post(backendUrl, payloadForBackend);
+    const data = res.data;
+    const commentBody = data.comment;
     if (!commentBody || !commentBody.trim()) {
       context.log("Backend returned empty comment, skipping.");
-      return;
+      return null;
     }
-
-    const issueComment = context.issue({ body: commentBody });
-    await context.octokit.issues.createComment(issueComment);
-    context.log.info("Posted comment from backend on PR.");
-  } catch (error) {
-    context.log.error("Error calling backend or posting comment", error);
+    return commentBody;
+  } catch (err) {
+    context.log.error("Error calling backend", err);
+    return null;
   }
 }
 
-module.exports = (app) => {
-  // Helper to fetch all changed files for a PR
-  async function getPrFiles(context, owner, repo, prNumber) {
-    const files = [];
-    let page = 1;
-    while (true) {
-      const res = await context.octokit.pulls.listFiles({
-        owner,
-        repo,
-        pull_number: prNumber,
-        per_page: 100,
-        page
+// helper for files (we keep it; see next section)
+async function getPrFiles(context, owner, repo, prNumber) {
+  const files = [];
+  let page = 1;
+  while (true) {
+    const res = await context.octokit.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 100,
+      page
+    });
+    if (!res.data.length) break;
+    for (const f of res.data) {
+      files.push({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch // unified diff (contains before & after)
       });
-
-      if (!res.data.length) break;
-
-      for (const f of res.data) {
-        files.push({
-          filename: f.filename,
-          status: f.status, // added / modified / removed
-          additions: f.additions,
-          deletions: f.deletions,
-          changes: f.changes,
-          patch: f.patch // diff hunk (can be long)
-        });
-      }
-
-      if (res.data.length < 100) break;
-      page += 1;
     }
-    return files;
+    if (res.data.length < 100) break;
+    page += 1;
   }
+  return files;
+}
 
-  // 1) Full review submission (Approve / Request changes / Comment)
+module.exports = (app) => {
+  // 1) Full review submitted (Approve / Request changes / Comment)
   app.on("pull_request_review.submitted", async (context) => {
     const review = context.payload.review;
     const pr = context.payload.pull_request;
@@ -68,76 +62,96 @@ module.exports = (app) => {
 
     const reviewBody = review.body || "";
     if (!reviewBody.trim()) {
-      context.log("Review body is empty, skipping.");
+      context.log("Review body empty, skipping.");
       return;
     }
 
-    const ownerLogin = repo.owner && repo.owner.login;
+    const owner = repo.owner.login;
     const repoName = repo.name;
     const prNumber = pr.number;
-
-    const files = await getPrFiles(context, ownerLogin, repoName, prNumber);
+    const files = await getPrFiles(context, owner, repoName, prNumber);
 
     const payloadForBackend = {
       kind: "review",
       review_body: reviewBody,
       review_state: review.state,
+      comment_body: null,
+      comment_path: null,
+      comment_diff_hunk: null,
+      comment_position: null,
+      comment_id: null,
       reviewer_login: review.user && review.user.login,
       pr_number: prNumber,
       pr_title: pr.title,
       pr_body: pr.body,
       pr_author_login: pr.user && pr.user.login,
       repo_full_name: repo.full_name,
-      repo_owner: ownerLogin,
+      repo_owner: owner,
       repo_name: repoName,
-      comment_body: null,
-      comment_path: null,
-      comment_diff_hunk: null,
-      comment_position: null,
       files
     };
 
-    await sendToBackend(context, payloadForBackend);
+    const commentBody = await callBackend(context, payloadForBackend);
+    if (!commentBody) return;
+
+    // “Reply” in conversation = normal issue comment on the PR
+    await context.octokit.issues.createComment({
+      owner,
+      repo: repoName,
+      issue_number: prNumber,
+      body: commentBody
+    });
   });
 
-  // 2) Single-line review comments (inline comments on Files changed)
+  // 2) Single inline comment on “Files changed”
   app.on("pull_request_review_comment.created", async (context) => {
     const comment = context.payload.comment;
     const pr = context.payload.pull_request;
     const repo = context.payload.repository;
 
-    const commentBody = comment.body || "";
-    if (!commentBody.trim()) {
-      context.log("Inline comment body is empty, skipping.");
+    const commentBodyOriginal = comment.body || "";
+    if (!commentBodyOriginal.trim()) {
+      context.log("Inline comment body empty, skipping.");
       return;
     }
 
-    const ownerLogin = repo.owner && repo.owner.login;
+    const owner = repo.owner.login;
     const repoName = repo.name;
     const prNumber = pr.number;
-
-    const files = await getPrFiles(context, ownerLogin, repoName, prNumber);
+    const files = await getPrFiles(context, owner, repoName, prNumber);
 
     const payloadForBackend = {
       kind: "review_comment",
       review_body: null,
       review_state: null,
+      comment_body: commentBodyOriginal,
+      comment_path: comment.path,
+      comment_diff_hunk: comment.diff_hunk,
+      comment_position: comment.position,
+      comment_id: comment.id, // important for reply
       reviewer_login: comment.user && comment.user.login,
       pr_number: prNumber,
       pr_title: pr.title,
       pr_body: pr.body,
       pr_author_login: pr.user && pr.user.login,
       repo_full_name: repo.full_name,
-      repo_owner: ownerLogin,
+      repo_owner: owner,
       repo_name: repoName,
-      // specific info about this inline comment:
-      comment_body: commentBody,
-      comment_path: comment.path, // file path
-      comment_diff_hunk: comment.diff_hunk, // snippet around the comment
-      comment_position: comment.position,   // position in diff (may be null in some modes)
       files
     };
 
-    await sendToBackend(context, payloadForBackend);
+    const replyBody = await callBackend(context, payloadForBackend);
+    if (!replyBody) return;
+
+    // 🔥 This is the “reply to that specific comment” part:
+    await context.octokit.pulls.createReplyForReviewComment({
+      owner,
+      repo: repoName,
+      pull_number: prNumber,
+      comment_id: comment.id,
+      body: replyBody
+    });
+
+    context.log.info("Replied to inline review comment.");
   });
 };
