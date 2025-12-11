@@ -65,6 +65,8 @@ def extract_before_after(patch: str):
 
 @app.post("/analyze-review", response_model=BackendResponse)
 async def analyze_review(payload: ReviewPayload):
+    import json, sys
+    print(json.dumps(payload.dict(), indent=2), file=sys.stderr)
     files = payload.files or []
     num_files = len(files)
 
