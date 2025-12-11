@@ -1,9 +1,6 @@
 // probot-app/index.js
 const axios = require("axios");
 
-/**
- * Call backend with prepared payload.
- */
 async function callBackend(context, payloadForBackend) {
   const backendUrl = process.env.BACKEND_URL;
   if (!backendUrl) {
@@ -28,46 +25,10 @@ async function callBackend(context, payloadForBackend) {
   }
 }
 
-/**
- * Fetch full file content for a given ref (commit SHA / branch).
- */
-async function getFileContent(context, owner, repo, path, ref) {
-  try {
-    const res = await context.octokit.repos.getContent({
-      owner,
-      repo,
-      path,
-      ref
-    });
-
-    const data = res.data;
-
-    // If it's a directory (array) or something unexpected, skip
-    if (Array.isArray(data) || !data.content) {
-      return null;
-    }
-
-    const encoding = data.encoding || "base64";
-    const buff = Buffer.from(data.content, encoding);
-    return buff.toString("utf8");
-  } catch (err) {
-    context.log.error(
-      { err, path, ref },
-      "Failed to fetch file content from GitHub"
-    );
-    return null;
-  }
-}
-
-/**
- * Get changed files for a PR, including:
- *  - metadata (status, additions, deletions, patch)
- *  - full content before and after change (base_content/head_content)
- */
-async function getPrFiles(context, owner, repo, prNumber, baseSha, headSha) {
+// helper for changed files
+async function getPrFiles(context, owner, repo, prNumber) {
   const files = [];
   let page = 1;
-
   while (true) {
     const res = await context.octokit.pulls.listFiles({
       owner,
@@ -76,41 +37,56 @@ async function getPrFiles(context, owner, repo, prNumber, baseSha, headSha) {
       per_page: 100,
       page
     });
-
     if (!res.data.length) break;
-
     for (const f of res.data) {
-      const filename = f.filename;
-
-      // For added files, there is no "before" content
-      const baseContent =
-        f.status === "added"
-          ? null
-          : await getFileContent(context, owner, repo, filename, baseSha);
-
-      // For removed files, there is no "after" content
-      const headContent =
-        f.status === "removed"
-          ? null
-          : await getFileContent(context, owner, repo, filename, headSha);
-
       files.push({
-        filename,
+        filename: f.filename,
         status: f.status,
         additions: f.additions,
         deletions: f.deletions,
         changes: f.changes,
-        patch: f.patch || null, // unified diff (contains before & after)
-        base_content: baseContent,
-        head_content: headContent
+        patch: f.patch // unified diff (contains before & after)
+      });
+    }
+    if (res.data.length < 100) break;
+    page += 1;
+  }
+  return files;
+}
+
+// NEW: helper to get all inline comments that belong to THIS review
+async function getCommentsForReview(context, owner, repo, prNumber, reviewId) {
+  const comments = [];
+  let page = 1;
+  while (true) {
+    const res = await context.octokit.pulls.listCommentsForReview({
+      owner,
+      repo,
+      pull_number: prNumber,
+      review_id: reviewId,
+      per_page: 100,
+      page
+    });
+
+    if (!res.data.length) break;
+
+    for (const c of res.data) {
+      comments.push({
+        id: c.id,
+        body: c.body,
+        path: c.path,
+        diff_hunk: c.diff_hunk,
+        position: c.position,
+        line: c.line,
+        original_line: c.original_line,
+        user_login: c.user && c.user.login
       });
     }
 
     if (res.data.length < 100) break;
     page += 1;
   }
-
-  return files;
+  return comments;
 }
 
 // ignore events from bots (your app, dependabot, etc.)
@@ -145,16 +121,15 @@ module.exports = (app) => {
       const repoName = repo.name;
       const prNumber = pr.number;
 
-      const baseSha = pr.base.sha;
-      const headSha = pr.head.sha;
+      const files = await getPrFiles(context, owner, repoName, prNumber);
 
-      const files = await getPrFiles(
+      // 🔥 NEW: fetch all inline comments that belong to this finished review
+      const reviewComments = await getCommentsForReview(
         context,
         owner,
         repoName,
         prNumber,
-        baseSha,
-        headSha
+        review.id
       );
 
       const payloadForBackend = {
@@ -174,13 +149,13 @@ module.exports = (app) => {
         repo_full_name: repo.full_name,
         repo_owner: owner,
         repo_name: repoName,
-        files
+        files,
+        review_comments: reviewComments // 👈 all inline comments in this review
       };
 
       const commentBody = await callBackend(context, payloadForBackend);
       if (!commentBody) return;
 
-      // Reply in PR conversation as a normal PR comment
       await context.octokit.issues.createComment({
         owner,
         repo: repoName,
@@ -192,7 +167,6 @@ module.exports = (app) => {
         { err },
         "Error while handling pull_request_review.submitted"
       );
-      // do not rethrow – we want Probot to return 200 instead of 500
     }
   });
 
@@ -217,18 +191,7 @@ module.exports = (app) => {
       const owner = repo.owner.login;
       const repoName = repo.name;
       const prNumber = pr.number;
-
-      const baseSha = pr.base.sha;
-      const headSha = pr.head.sha;
-
-      const files = await getPrFiles(
-        context,
-        owner,
-        repoName,
-        prNumber,
-        baseSha,
-        headSha
-      );
+      const files = await getPrFiles(context, owner, repoName, prNumber);
 
       const payloadForBackend = {
         kind: "review_comment",
@@ -247,13 +210,14 @@ module.exports = (app) => {
         repo_full_name: repo.full_name,
         repo_owner: owner,
         repo_name: repoName,
-        files
+        files,
+        // for a single inline comment event, you *could* send it too
+        review_comments: null
       };
 
       const replyBody = await callBackend(context, payloadForBackend);
       if (!replyBody) return;
 
-      // Reply to that specific inline comment thread
       await context.octokit.pulls.createReplyForReviewComment({
         owner,
         repo: repoName,
@@ -268,7 +232,6 @@ module.exports = (app) => {
         { err },
         "Error while handling pull_request_review_comment.created"
       );
-      // do not rethrow
     }
   });
 };
