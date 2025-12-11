@@ -24,7 +24,7 @@ async function callBackend(context, payloadForBackend) {
   }
 }
 
-// helper for files (we keep it; see next section)
+// helper for files
 async function getPrFiles(context, owner, repo, prNumber) {
   const files = [];
   let page = 1;
@@ -53,9 +53,27 @@ async function getPrFiles(context, owner, repo, prNumber) {
   return files;
 }
 
+// 🔒 helper: ignore events coming from bots (including this GitHub App)
+function isFromBot(context) {
+  const sender = context.payload.sender;
+  if (!sender) return false;
+
+  // GitHub marks app users as type "Bot" and login like "my-app[bot]"
+  if (sender.type === "Bot") return true;
+  if (sender.login && sender.login.endsWith("[bot]")) return true;
+
+  return false;
+}
+
 module.exports = (app) => {
   // 1) Full review submitted (Approve / Request changes / Comment)
   app.on("pull_request_review.submitted", async (context) => {
+    // ⛔ don’t process reviews created by bots
+    if (isFromBot(context)) {
+      context.log("Skipping pull_request_review from bot sender.");
+      return;
+    }
+
     const review = context.payload.review;
     const pr = context.payload.pull_request;
     const repo = context.payload.repository;
@@ -105,6 +123,12 @@ module.exports = (app) => {
 
   // 2) Single inline comment on “Files changed”
   app.on("pull_request_review_comment.created", async (context) => {
+    // ⛔ don’t process inline comments created by bots (prevents infinite loop)
+    if (isFromBot(context)) {
+      context.log("Skipping pull_request_review_comment from bot sender.");
+      return;
+    }
+
     const comment = context.payload.comment;
     const pr = context.payload.pull_request;
     const repo = context.payload.repository;
@@ -143,7 +167,7 @@ module.exports = (app) => {
     const replyBody = await callBackend(context, payloadForBackend);
     if (!replyBody) return;
 
-    // 🔥 This is the “reply to that specific comment” part:
+    // Reply to that specific inline comment
     await context.octokit.pulls.createReplyForReviewComment({
       owner,
       repo: repoName,
