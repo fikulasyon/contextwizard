@@ -7,9 +7,8 @@ backend/.env
 # Node
 probot-app/node_modules/
 probot-app/package-lock.json
-probot-app/.env
-# Environment files
-# probot-app/.env
+
+.env
 
 # OS/files
 .DS_Store
