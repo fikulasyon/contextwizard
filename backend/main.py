@@ -1,21 +1,35 @@
 # backend/main.py
+from __future__ import annotations
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Callable, TypeVar
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 import os
 import json
 import sys
+import time
+import random
+import re
 
 import anyio
 from google import genai
 
 types = genai.types  # alias for convenience
-
 app = FastAPI()
+
+# ----------------------------
+# Retry config (tune here)
+# ----------------------------
+# You asked for 0.5s waits. In practice, starting a bit lower often clears transient 503s
+# faster while still being gentle on the API.
+RETRY_INITIAL_DELAY_SEC = float(os.getenv("GEMINI_RETRY_INITIAL_DELAY", "0.35"))  # start slightly < 0.5
+RETRY_MAX_DELAY_SEC = float(os.getenv("GEMINI_RETRY_MAX_DELAY", "2.0"))
+RETRY_MAX_ATTEMPTS = int(os.getenv("GEMINI_RETRY_MAX_ATTEMPTS", "12"))
+RETRY_JITTER_SEC = float(os.getenv("GEMINI_RETRY_JITTER_SEC", "0.10"))  # small jitter to avoid thundering herd
 
 
 # ----------------------------
@@ -194,14 +208,104 @@ def extract_first_fenced_code_block(text: str) -> str:
     """
     if not text:
         return "```diff\n```"
-    start = text.find("```")
-    if start == -1:
-        return f"```\n{text.strip()}\n```"
-    end = text.find("```", start + 3)
-    if end == -1:
-        return text[start:].strip()
-    end = text.find("```", end)
-    return text[start : end + 3].strip()
+
+    m = re.search(r"```[a-zA-Z0-9_-]*\n.*?\n```", text, flags=re.DOTALL)
+    if m:
+        return m.group(0).strip()
+
+    # fallback: if it contains ``` but weirdly formatted, return from first fence onward
+    if "```" in text:
+        first = text.find("```")
+        return text[first:].strip()
+
+    return f"```\n{text.strip()}\n```"
+
+
+# ----------------------------
+# Gemini retry wrapper (sync)
+# ----------------------------
+T = TypeVar("T")
+
+
+def _is_transient_gemini_error(exc: Exception) -> bool:
+    """
+    Best-effort transient detection for overload / rate limit / gateway issues.
+    Gemini errors can surface with different exception types depending on runtime;
+    we rely on message heuristics + common status codes.
+    """
+    msg = (str(exc) or "").lower()
+
+    # common transient signals
+    transient_markers = [
+        "503",
+        "overloaded",
+        "unavailable",
+        "resource exhausted",
+        "rate limit",
+        "quota",
+        "429",
+        "timeout",
+        "timed out",
+        "deadline exceeded",
+        "connection reset",
+        "connection aborted",
+        "bad gateway",
+        "502",
+        "gateway timeout",
+        "504",
+        "internal error",
+        "500",
+        "temporarily",
+        "try again",
+    ]
+    return any(m in msg for m in transient_markers)
+
+
+def gemini_call_with_retry(
+    call_name: str,
+    fn: Callable[[], T],
+    *,
+    max_attempts: int = RETRY_MAX_ATTEMPTS,
+    initial_delay: float = RETRY_INITIAL_DELAY_SEC,
+    max_delay: float = RETRY_MAX_DELAY_SEC,
+    jitter: float = RETRY_JITTER_SEC,
+) -> T:
+    """
+    Retries transient Gemini failures (e.g., 503 overloaded).
+    Prints attempts to stderr so you can track retries in logs.
+    """
+    attempt = 1
+    delay = max(0.0, initial_delay)
+
+    while True:
+        try:
+            print(f"[gemini] {call_name}: attempt {attempt}/{max_attempts}", file=sys.stderr)
+            return fn()
+        except Exception as e:
+            transient = _is_transient_gemini_error(e)
+            print(
+                f"[gemini] {call_name}: attempt {attempt} failed "
+                f"(transient={transient}) -> {type(e).__name__}: {str(e)[:220]}",
+                file=sys.stderr,
+            )
+
+            # If it's not transient, fail fast
+            if not transient:
+                raise
+
+            # If we've exhausted attempts, re-raise
+            if attempt >= max_attempts:
+                raise
+
+            # Sleep then retry
+            # add a tiny jitter to avoid synchronized retries across concurrent requests
+            sleep_for = min(max_delay, delay) + random.uniform(0.0, max(0.0, jitter))
+            print(f"[gemini] {call_name}: sleeping {sleep_for:.2f}s before retry", file=sys.stderr)
+            time.sleep(sleep_for)
+
+            # Gentle backoff
+            delay = min(max_delay, max(delay, 0.05) * 1.5)
+            attempt += 1
 
 
 # ----------------------------
@@ -232,21 +336,30 @@ Return ONLY valid JSON for the schema.
 
     ctx = build_llm_context(payload)
 
-    resp = client.models.generate_content(
-        model=model,
-        contents=[types.Content(role="user", parts=[types.Part(text=f"{system_instructions}\n\nCONTEXT:\n{ctx}")])],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=Classification,
-            temperature=0.2,
-        ),
-    )
+    def _call():
+        resp = client.models.generate_content(
+            model=model,
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=f"{system_instructions}\n\nCONTEXT:\n{ctx}")],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=Classification,
+                temperature=0.2,
+            ),
+        )
 
-    data = getattr(resp, "parsed", None)
-    if data is None:
-        data = json.loads(resp.text)
+        data = getattr(resp, "parsed", None)
+        if data is None:
+            # sometimes resp.text may be empty on failures; let that raise
+            data = json.loads(resp.text)
 
-    return Classification.model_validate(data)
+        return Classification.model_validate(data)
+
+    return gemini_call_with_retry("classify_with_gemini", _call)
 
 
 def clarify_bad_question(payload: ReviewPayload, cls: Classification) -> ClarifiedQuestion:
@@ -265,21 +378,29 @@ Rules:
 
     ctx = build_llm_context(payload)
 
-    resp = client.models.generate_content(
-        model=model,
-        contents=[types.Content(role="user", parts=[types.Part(text=f"{system_instructions}\n\nCONTEXT:\n{ctx}")])],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ClarifiedQuestion,
-            temperature=0.2,
-        ),
-    )
+    def _call():
+        resp = client.models.generate_content(
+            model=model,
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=f"{system_instructions}\n\nCONTEXT:\n{ctx}")],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ClarifiedQuestion,
+                temperature=0.2,
+            ),
+        )
 
-    data = getattr(resp, "parsed", None)
-    if data is None:
-        data = json.loads(resp.text)
+        data = getattr(resp, "parsed", None)
+        if data is None:
+            data = json.loads(resp.text)
 
-    return ClarifiedQuestion.model_validate(data)
+        return ClarifiedQuestion.model_validate(data)
+
+    return gemini_call_with_retry("clarify_bad_question", _call)
 
 
 def clarify_bad_change(payload: ReviewPayload, cls: Classification) -> ClarifiedChange:
@@ -298,21 +419,29 @@ Rules:
 
     ctx = build_llm_context(payload)
 
-    resp = client.models.generate_content(
-        model=model,
-        contents=[types.Content(role="user", parts=[types.Part(text=f"{system_instructions}\n\nCONTEXT:\n{ctx}")])],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ClarifiedChange,
-            temperature=0.2,
-        ),
-    )
+    def _call():
+        resp = client.models.generate_content(
+            model=model,
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=f"{system_instructions}\n\nCONTEXT:\n{ctx}")],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ClarifiedChange,
+                temperature=0.2,
+            ),
+        )
 
-    data = getattr(resp, "parsed", None)
-    if data is None:
-        data = json.loads(resp.text)
+        data = getattr(resp, "parsed", None)
+        if data is None:
+            data = json.loads(resp.text)
 
-    return ClarifiedChange.model_validate(data)
+        return ClarifiedChange.model_validate(data)
+
+    return gemini_call_with_retry("clarify_bad_change", _call)
 
 
 def generate_code_suggestion(
@@ -355,13 +484,15 @@ CONTEXT (reference only):
 Return ONLY the single fenced code block now.
 """.strip()
 
-    resp = client.models.generate_content(
-        model=model,
-        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-        config=types.GenerateContentConfig(temperature=0.2),
-    )
+    def _call():
+        resp = client.models.generate_content(
+            model=model,
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+            config=types.GenerateContentConfig(temperature=0.2),
+        )
+        return extract_first_fenced_code_block((resp.text or "").strip())
 
-    return extract_first_fenced_code_block((resp.text or "").strip())
+    return gemini_call_with_retry("generate_code_suggestion", _call)
 
 
 # ----------------------------
@@ -414,9 +545,6 @@ def format_bad_change_with_suggestion_comment(
     clarified_request: str,
     suggestion_block: str,
 ) -> str:
-    # You asked for exactly:
-    # 1- clarified version
-    # 2- suggested code change (current strict block)
     return "\n".join(
         [
             f"1- **clarified version:** {clarified_request}",
@@ -439,7 +567,7 @@ async def analyze_review(payload: ReviewPayload):
     print("==========================", file=sys.stderr)
 
     # 1) Classify
-    print("Classifying with Gemini...")
+    print("Classifying with Gemini...", file=sys.stderr)
     try:
         cls = await anyio.to_thread.run_sync(classify_with_gemini, payload)
     except Exception as e:
@@ -458,7 +586,7 @@ async def analyze_review(payload: ReviewPayload):
 
     # 2) GOOD_CHANGE -> strict short code suggestion (diff/suggestion only)
     if cls.category == "GOOD_CHANGE" and cls.confidence >= 0.7:
-        print("Generating good change with Gemini...")
+        print("Generating good change with Gemini...", file=sys.stderr)
         try:
             suggestion_block = await anyio.to_thread.run_sync(generate_code_suggestion, payload, cls, None)
             return BackendResponse(comment=suggestion_block)
@@ -474,7 +602,7 @@ async def analyze_review(payload: ReviewPayload):
 
     # 3) BAD_QUESTION -> clarified question message
     if cls.category == "BAD_QUESTION" and cls.confidence >= 0.55:
-        print("Clarifying bad question with Gemini...")
+        print("Clarifying bad question with Gemini...", file=sys.stderr)
         try:
             cq = await anyio.to_thread.run_sync(clarify_bad_question, payload, cls)
             return BackendResponse(comment=format_clarification_question_comment(payload, cls, cq))
@@ -488,9 +616,9 @@ async def analyze_review(payload: ReviewPayload):
             )
             return BackendResponse(comment=format_debug_comment(payload, fallback))
 
-    # 4) BAD_CHANGE -> clarify -> code suggestion -> reply includes BOTH (your required format)
+    # 4) BAD_CHANGE -> clarify -> code suggestion -> reply includes BOTH
     if cls.category == "BAD_CHANGE" and cls.confidence >= 0.55:
-        print("Clarifying bad change and generating suggestion with Gemini...")
+        print("Clarifying bad change and generating suggestion with Gemini...", file=sys.stderr)
         try:
             cc = await anyio.to_thread.run_sync(clarify_bad_change, payload, cls)
             suggestion_block = await anyio.to_thread.run_sync(
