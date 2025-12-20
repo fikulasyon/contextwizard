@@ -5,12 +5,23 @@ const axios = require("axios");
  * Env
  */
 function getBackendUrl(context) {
-  const url = process.env.BACKEND_URL;
-  if (!url) {
+  const rawUrl = process.env.BACKEND_URL;
+
+  if (!rawUrl) {
     context.log.error("BACKEND_URL is not set in environment variables");
     return null;
   }
-  return url;
+
+  const protocol = rawUrl.includes('onrender.com') ? 'https://' : 'http://';
+  let baseUrl = rawUrl.startsWith('http') ? rawUrl : `${protocol}${rawUrl}`;
+  if (baseUrl.endsWith('/')) {
+    baseUrl = baseUrl.slice(0, -1);
+  }
+
+  const finalUrl = baseUrl + "/analyze-review";
+  context.log.info(`Calling backend at: ${finalUrl}`);
+
+  return finalUrl;
 }
 
 /**
