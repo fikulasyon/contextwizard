@@ -1,7 +1,9 @@
 services:
+  # --- BACKEND (FastAPI) ---
   - type: web
     name: contextwizard-backend
     runtime: docker
+    branch: clean-code+deploy
     dockerContext: backend
     dockerfilePath: Dockerfile
     plan: free
@@ -16,9 +18,11 @@ services:
       - key: PORT
         value: 8000
 
+  # --- PROBOT APP (Node.js) ---
   - type: web
     name: contextwizard-probot
     runtime: docker
+    branch: clean-code+deploy
     dockerContext: probot-app
     dockerfilePath: Dockerfile
     plan: free
