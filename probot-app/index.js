@@ -5,7 +5,7 @@ const axios = require("axios");
  * Env
  */
 function getBackendUrl(context) {
-  const url = process.env.BACKEND_URL;
+  const url = process.env.BACKEND_URL + "/analyze-review";
   if (!url) {
     context.log.error("BACKEND_URL is not set in environment variables");
     return null;
