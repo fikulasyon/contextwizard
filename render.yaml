@@ -1,14 +1,10 @@
 services:
-  # --- SERVICE BACKEND ---
   - type: web
     name: contextwizard-backend
     runtime: docker
     repo: https://github.com/fikulasyon/contextwizard
     branch: clean-code+deploy
-    # On définit la racine du projet comme contexte de build
-    rootDir: .
-    # Chemin relatif depuis la racine
-    dockerfilePath: backend/Dockerfile
+    rootDir: backend
     plan: free
     region: frankfurt
     envVars:
@@ -21,16 +17,12 @@ services:
       - key: PORT
         value: 8000
 
-  # --- SERVICE PROBOT ---
   - type: web
     name: contextwizard-probot
     runtime: docker
     repo: https://github.com/fikulasyon/contextwizard
     branch: clean-code+deploy
-    # On définit également la racine ici
-    rootDir: .
-    # Chemin relatif depuis la racine
-    dockerfilePath: probot-app/Dockerfile
+    rootDir: probot-app
     plan: free
     region: frankfurt
     envVars:
