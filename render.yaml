@@ -3,8 +3,8 @@ services:
   - type: web
     name: contextwizard-backend
     runtime: docker
-    dockerContext: ./backend
-    dockerfilePath: Dockerfile
+    dockerContext: .
+    dockerfilePath: backend/Dockerfile
     plan: free
     region: frankfurt
     envVars:
@@ -14,10 +14,6 @@ services:
         sync: false
       - key: PERPLEXITY_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: gemini-2.0-flash
-      - key: PERPLEXITY_MODEL
-        value: sonar-reasoning
       - key: PORT
         value: 8000
 
@@ -25,8 +21,8 @@ services:
   - type: web
     name: contextwizard-probot
     runtime: docker
-    dockerContext: ./probot-app
-    dockerfilePath: Dockerfile
+    dockerContext: .
+    dockerfilePath: probot-app/Dockerfile
     plan: free
     region: frankfurt
     envVars:
@@ -36,8 +32,6 @@ services:
         sync: false
       - key: PRIVATE_KEY
         sync: false
-      - key: PORT
-        value: 3000
       - key: BACKEND_URL
         fromService:
           name: contextwizard-backend
