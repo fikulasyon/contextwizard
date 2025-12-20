@@ -8,7 +8,7 @@ services:
     plan: free
     envVars:
       - key: LLM_PROVIDER
-        value: gemini
+        value: perplexity
       - key: GEMINI_API_KEY
         sync: false
       - key: PERPLEXITY_API_KEY
