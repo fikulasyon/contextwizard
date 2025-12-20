@@ -33,7 +33,4 @@ services:
       - key: PRIVATE_KEY
         sync: false
       - key: BACKEND_URL
-        fromService:
-          name: contextwizard-backend
-          type: web
-          property: host
+        value: http://contextwizard-backend:8000
