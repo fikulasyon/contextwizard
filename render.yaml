@@ -36,4 +36,4 @@ services:
         fromService:
           name: contextwizard-backend
           type: web
-          property: url
+          property: host
