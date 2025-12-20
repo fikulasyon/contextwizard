@@ -2,10 +2,11 @@ services:
   # --- BACKEND (FastAPI) ---
   - type: web
     name: contextwizard-backend
-    env: docker
+    runtime: docker
     dockerContext: ./backend
-    dockerfilePath: ./backend/Dockerfile
+    dockerfilePath: Dockerfile
     plan: free
+    region: frankfurt
     envVars:
       - key: LLM_PROVIDER
         value: perplexity
@@ -17,14 +18,17 @@ services:
         value: gemini-2.0-flash
       - key: PERPLEXITY_MODEL
         value: sonar-reasoning
+      - key: PORT
+        value: 8000
 
   # --- PROBOT APP (Node.js) ---
   - type: web
     name: contextwizard-probot
-    env: docker
+    runtime: docker
     dockerContext: .
     dockerfilePath: ./probot-app/Dockerfile
     plan: free
+    region: frankfurt
     envVars:
       - key: APP_ID
         sync: false
@@ -32,9 +36,10 @@ services:
         sync: false
       - key: PRIVATE_KEY
         sync: false
+      - key: PORT
+        value: 3000
       - key: BACKEND_URL
         fromService:
           name: contextwizard-backend
           type: web
           property: host
-        generateValue: true
