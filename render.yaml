@@ -4,8 +4,9 @@ services:
     name: contextwizard-backend
     runtime: docker
     branch: clean-code+deploy
-    dockerContext: backend
-    dockerfilePath: Dockerfile
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: free
     region: frankfurt
     envVars:
@@ -23,8 +24,9 @@ services:
     name: contextwizard-probot
     runtime: docker
     branch: clean-code+deploy
-    dockerContext: probot-app
-    dockerfilePath: Dockerfile
+    rootDir: probot-app
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: free
     region: frankfurt
     envVars:
