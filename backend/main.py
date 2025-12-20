@@ -588,8 +588,11 @@ async def analyze_review(payload: ReviewPayload):
         )
         return BackendResponse(comment=format_debug_comment(payload, cls))
 
-    # Only do follow-up actions for inline comments
-    if payload.kind != "review_comment":
+    # Follow-up actions for BOTH:
+    # - inline review comments (review_comment)
+    # - general review submissions (review)
+    # Anything else falls back to debug.
+    if payload.kind not in ("review_comment", "review"):
         return BackendResponse(comment=format_debug_comment(payload, cls))
 
     # 2) GOOD_CHANGE -> strict short code suggestion (diff/suggestion only)
