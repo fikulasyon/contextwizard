@@ -1,10 +1,9 @@
 services:
-  # --- BACKEND (FastAPI) ---
   - type: web
     name: contextwizard-backend
     runtime: docker
-    dockerContext: .
-    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    dockerfilePath: Dockerfile
     plan: free
     region: frankfurt
     envVars:
@@ -17,12 +16,11 @@ services:
       - key: PORT
         value: 8000
 
-  # --- PROBOT APP (Node.js) ---
   - type: web
     name: contextwizard-probot
     runtime: docker
-    dockerContext: .
-    dockerfilePath: probot-app/Dockerfile
+    dockerContext: probot-app
+    dockerfilePath: Dockerfile
     plan: free
     region: frankfurt
     envVars:
