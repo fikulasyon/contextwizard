@@ -1,8 +1,8 @@
 services:
-  # --- BACKEND (FastAPI) ---
   - type: web
     name: contextwizard-backend
     runtime: docker
+    repo: https://github.com/fikulasyon/contextwizard
     branch: clean-code+deploy
     rootDir: backend
     dockerfilePath: Dockerfile
@@ -18,10 +18,10 @@ services:
       - key: PORT
         value: 8000
 
-  # --- PROBOT APP (Node.js) ---
   - type: web
     name: contextwizard-probot
     runtime: docker
+    repo: https://github.com/fikulasyon/contextwizard
     branch: clean-code+deploy
     rootDir: probot-app
     dockerfilePath: Dockerfile
