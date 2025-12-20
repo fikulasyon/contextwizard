@@ -5,8 +5,7 @@ services:
     runtime: docker
     branch: clean-code+deploy
     rootDir: backend
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    dockerfilePath: Dockerfile
     plan: free
     region: frankfurt
     envVars:
@@ -25,8 +24,7 @@ services:
     runtime: docker
     branch: clean-code+deploy
     rootDir: probot-app
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    dockerfilePath: Dockerfile
     plan: free
     region: frankfurt
     envVars:
