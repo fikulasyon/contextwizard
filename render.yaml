@@ -4,8 +4,9 @@ services:
     runtime: docker
     repo: https://github.com/fikulasyon/contextwizard
     branch: clean-code+deploy
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: free
     region: frankfurt
     envVars:
@@ -23,8 +24,9 @@ services:
     runtime: docker
     repo: https://github.com/fikulasyon/contextwizard
     branch: clean-code+deploy
-    dockerfilePath: ./probot-app/Dockerfile
-    dockerContext: ./probot-app
+    rootDir: probot-app
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: free
     region: frankfurt
     envVars:
