@@ -5,7 +5,8 @@ services:
     repo: https://github.com/fikulasyon/contextwizard
     branch: clean-code+deploy
     rootDir: backend
-    dockerfilePath: Dockerfile
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: free
     region: frankfurt
     envVars:
@@ -24,7 +25,8 @@ services:
     repo: https://github.com/fikulasyon/contextwizard
     branch: clean-code+deploy
     rootDir: probot-app
-    dockerfilePath: Dockerfile
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: free
     region: frankfurt
     envVars:
