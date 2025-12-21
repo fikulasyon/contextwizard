@@ -15,14 +15,14 @@ The system is designed to **reduce back-and-forth in PR discussions**, improve r
 
 ## ⚙️ Environment Variables
 
-### Backend (`backend/.env`)###
+### Backend (`backend/.env`)
 GEMINI_API_KEY="AIxxxxx"
 
 GEMINI_MODEL="gemini-2.5-flash-lite"
 
 PENDING_COMMENTS_DB=./pending_comments.db
 
-### Frontend (`probot-app/.env`)###
+### Frontend (`probot-app/.env`)
 APP_ID=2453186
 
 PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
@@ -59,7 +59,7 @@ BACKEND_URL=http://localhost:8000
 
 PORT=3000
 
-##🧩 Dependencies##
+##🧩 Dependencies
 Backend (backend/requirements.txt)
 
 fastapi >= 0.115.0
@@ -74,10 +74,10 @@ google-genai >= 0.3.0
 
 anyio >= 4.0.0
 
-##🚀 Running the System ##
+##🚀 Running the System 
 First create a venv in backend and insall requirements.
 
-###Terminal 1 – Backend API###
+###Terminal 1 – Backend API
 source venv/bin/activate   # Windows: venv\Scripts\activate
 cd backend
 uvicorn main:app --reload --port 8000
@@ -85,14 +85,14 @@ uvicorn main:app --reload --port 8000
 Backend will run at: http://localhost:8000
 
 
-###Terminal 2 – Probot GitHub App###
+###Terminal 2 – Probot GitHub App
 cd probot-app
 npm install
 npm run dev
 
 This starts the GitHub App server on port 3000.
 
-###Terminal 3 – Webhook Forwarding (Smee)###
+###Terminal 3 – Webhook Forwarding (Smee)
 npx smee-client \
   --url https://smee.io/y6inAjkDY0kzhR7f \
   --target http://localhost:3000/api/github/webhooks
