@@ -13,40 +13,6 @@ The system is designed to **reduce back-and-forth in PR discussions**, improve r
 - **Guillaume-Alain PRISO TOTTO** (22501093)  
 - **Hamza CHAABA** (22501096)  
 
----
-
-## 🏗️ System Architecture
-
-ContextWizard is composed of two main components:
-
-- **Backend Service**
-  - FastAPI-based REST API
-  - Handles intent classification and code suggestion generation
-  - Powered by Google Gemini LLMs
-  - Maintains lightweight state using SQLite
-
-- **GitHub App (Probot)**
-  - Listens to GitHub webhook events
-  - Extracts PR context and review comments
-  - Communicates with the backend
-  - Posts responses back to pull requests
-
----
-
-## 📁 Project Structure
-
-.
-├── backend/
-│ ├── main.py
-│ ├── requirements.txt
-│ ├── pending_comments.db
-│ └── .env
-│
-├── probot-app/
-│ ├── index.js
-│ ├── package.json
-│ └── .env
-
 ## ⚙️ Environment Variables
 
 ### Backend (`backend/.env`)
