@@ -680,12 +680,8 @@ def format_debug_comment(payload: ReviewPayload, cls: Classification) -> str:
 
     lines = [
         "🧠 **ContextWizard (debug: classification only)**",
-        f"- event: {where}",
         f"- category: **{cls.category}**",
         f"- confidence: {cls.confidence:.2f}",
-        f"- needs_reply: {cls.needs_reply}",
-        f"- needs_clarification: {cls.needs_clarification}",
-        f"- reason: {cls.short_reason}",
         "",
         "**Original text:**",
         f"> {(original_text[:500] + '…') if len(original_text) > 500 else original_text}".replace("\n", "\n> "),
@@ -702,8 +698,6 @@ def format_clarification_question_comment(payload: ReviewPayload, cls: Classific
         f"- category: **{cls.category}**",
         f"- classification_confidence: {cls.confidence:.2f}",
         f"- rewrite_confidence: {cq.confidence:.2f}",
-        f"- reason: {cls.short_reason}",
-        f"- rewrite_note: {cq.short_reason}",
         "",
         "**Original question:**",
         f"> {(original_text[:800] + '…') if len(original_text) > 800 else original_text}".replace("\n", "\n> "),
