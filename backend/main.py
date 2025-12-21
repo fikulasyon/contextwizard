@@ -13,6 +13,7 @@ import time
 import random
 import re
 import anyio
+import uvicorn
 
 # AI Clients
 from google import genai
@@ -448,3 +449,7 @@ Change requested: {cc.clarified_request}""",
 
     # Default: classification debug
     return BackendResponse(comment=format_debug_comment(payload, cls))
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
