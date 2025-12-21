@@ -15,11 +15,12 @@ The system is designed to **reduce back-and-forth in PR discussions**, improve r
 
 ## ⚙️ Environment Variables
 
-### Backend (`backend/.env`)
+### Backend (`backend/.env`)###
 GEMINI_API_KEY="AIxxxxx"
 GEMINI_MODEL="gemini-2.5-flash-lite"
 PENDING_COMMENTS_DB=./pending_comments.db
 
+### Frontend (`probot-app/.env`)###
 APP_ID=2453186
 PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
 MIIEowIBAAKCAQEA2mMR0gIy0pdvENobMEQ37SMquuM95kt59AsxbE8D1jIOb3Ik
@@ -62,6 +63,7 @@ google-genai >= 0.3.0
 anyio >= 4.0.0
 
 ##🚀 Running the System ##
+First create a venv in backend and insall requirements.
 
 ###Terminal 1 – Backend API###
 source venv/bin/activate   # Windows: venv\Scripts\activate
