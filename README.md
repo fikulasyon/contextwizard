@@ -1,106 +1,121 @@
 # 🧙‍♂️ ContextWizard: LLM-Powered Code Review Orchestrator
 
-**ContextWizard** is an advanced AI-driven GitHub App built to revolutionize the Pull Request review cycle. By leveraging a dual-service architecture and state-of-the-art Large Language Models (LLMs), it acts as a proactive technical partner that classifies feedback, clarifies ambiguity, and performs autonomous security audits.
+**ContextWizard** is an advanced AI-driven GitHub App built to streamline and enhance the Pull Request (PR) review process. Using a dual-service architecture and Large Language Models (LLMs), it helps reviewers and contributors by classifying review intent, clarifying ambiguous feedback, and generating actionable code suggestions directly within GitHub.
 
-## 👥 Authors (Bilkent University - CS453)
-
-* **Mert Terkuran** (22101645)
-* **Ahmet Faik Utku** (22103582)
-* **Guillaume-Alain PRISO TOTTO** (22501093)
-* **Hamza CHAABA** (22501096)
+The system is designed to **reduce back-and-forth in PR discussions**, improve review clarity, and accelerate merge times without disrupting existing workflows.
 
 ---
 
-## 🏗 System Architecture
+## 👥 Authors (Bilkent University – CS453)
 
-The project is architected as a decoupled system to ensure scalability and model agnosticism.
-
-1. **Event Gateway (Probot/Node.js)**: Acts as the primary interface with GitHub. It listens to webhooks, manages the GitHub App’s security handshake, and translates GitHub-specific payloads into a unified format for the backend.
-2. **LLM Orchestrator (FastAPI/Python)**: The "brain" of the operation. It handles prompt engineering, context management (clipping/truncating), and communicates with AI providers via an asynchronous, thread-safe implementation.
-
----
-
-## 🌟 Advanced Features & Functional Requirements
-
-### 1. Multi-Provider Provider Switching (The Switcher)
-
-Unlike hardcoded integrations, ContextWizard features a centralized orchestrator. By changing the `LLM_PROVIDER` environment variable, you can switch between:
-
-* **Google Gemini 2.0 Flash**: Optimized for structured data extraction and rapid classification.
-* **Perplexity Sonar**: Utilized for deep technical reasoning and complex code clarification.
-
-### 2. Autonomous "Wizard Review" (FR5.1)
-
-Triggered by a manual command, the AI performs a comprehensive audit of the entire PR diff. It identifies:
-
-* **Bugs & Logic Errors**: Potential null pointers, race conditions, or off-by-one errors.
-* **Security Vulnerabilities**: Hardcoded secrets, injection risks, or weak cryptographic patterns.
-* **Best Practices**: Alignment with language-specific style guides and performance optimizations.
-
-### 3. Intelligent Classification & Clarification (FR3.1 & FR4.1)
-
-The bot monitors all review comments and classifies them into:
-`PRAISE`, `GOOD_CHANGE`, `BAD_CHANGE`, `GOOD_QUESTION`, `BAD_QUESTION`.
-
-* **Action**: If a comment is flagged as `BAD` (ambiguous), the bot automatically generates a **Clarified Version** to assist the developer in understanding the feedback.
+- **Mert Terkuran** (22101645)  
+- **Ahmet Faik Utku** (22103582)  
+- **Guillaume-Alain PRISO TOTTO** (22501093)  
+- **Hamza CHAABA** (22501096)  
 
 ---
 
-## 🎮 Command Reference
+## 🏗️ System Architecture
 
-| Command | Context | Effect |
-| --- | --- | --- |
-| `/wizard-review` | PR Comment | Performs a full-diff scan and posts a technical audit report. |
-| *(Auto-trigger)* | On Review Post | Analyzes clarity and posts a clarified version if ambiguity is detected. |
+ContextWizard is composed of two main components:
 
----
+- **Backend Service**
+  - FastAPI-based REST API
+  - Handles intent classification and code suggestion generation
+  - Powered by Google Gemini LLMs
+  - Maintains lightweight state using SQLite
 
-## 🛠 Technical Implementation Details
-
-### Backend Logic
-
-* **Structured Output Enforcement**: Uses Pydantic to validate LLM JSON responses. If a model "hallucinates" a field, the backend catches the error before it reaches the user.
-* **Context Clipping**: Intelligent truncation logic ensures that large diffs are "clipped" to fit within LLM token limits while retaining critical code context.
-* **Resilience**: Implements exponential backoff and jittered retries to handle transient 503 errors and rate limits from Google/Perplexity APIs.
-
-### Deployment Configuration
-
-The system is fully containerized and deployable via the included `render.yaml` Blueprint.
-
-* **Networking**: Services communicate via Render's internal private network on port `8000`.
-* **Security**: Uses RSA Private Keys for GitHub App authentication and encrypted environment variables for LLM API keys.
+- **GitHub App (Probot)**
+  - Listens to GitHub webhook events
+  - Extracts PR context and review comments
+  - Communicates with the backend
+  - Posts responses back to pull requests
 
 ---
 
-## 🚀 Getting Started
+## 📁 Project Structure
 
-### Local Setup
+.
+├── backend/
+│ ├── main.py
+│ ├── requirements.txt
+│ ├── pending_comments.db
+│ └── .env
+│
+├── probot-app/
+│ ├── index.js
+│ ├── package.json
+│ └── .env
 
-1. **Clone the Repository**:
-```bash
-git clone https://github.com/fikulasyon/contextwizard.git
+## ⚙️ Environment Variables
 
-```
+### Backend (`backend/.env`)
+GEMINI_API_KEY="AIxxxxx"
+GEMINI_MODEL="gemini-2.5-flash-lite"
+PENDING_COMMENTS_DB=./pending_comments.db
+
+APP_ID=2453186
+PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA2mMR0gIy0pdvENobMEQ37SMquuM95kt59AsxbE8D1jIOb3Ik
+gvr+LHKnhltZ9osCCi87w7Ui2OPrv29IgDs+qrtKwITMebZ/sQrpKhB8CIr7NFNN
+gGgT0/HThpkfN/gL6TnmB283e4/OMgwvK695bPZSBSmN0yoI3t/BND9LAi6PvoCa
+8Wc6U4I8Y4qF5omxR+WA8hDg0yk36j2gwiDEEWuDhFPcVuVOoIvkTywkf0LkWMpS
+5QGr4cohCPrX2lnz848mS6AQbDqCokl6smPVubUNf/PS8fxEVNXxj1CUPnmsqxW/
+G3ddtt66/Mvo2qF/dV5qsK3Zsa0AqmNF4ytPOwIDAQABAoIBABrdYQ3Sk2nwkwsh
+qYKQgci8ML94wN6ZnlD1J4lJVxF8auYuxmsOcUIKgK04g6Keiwuxr8ptd/HyZ8fO
+6r5Li3P5QkLYk0bNunuO+gvgp0Ftx2UycjA/nWDPONQv9fUuoFh6dN+pQMwEbrsd
+YJghJ/DNhF16NSYq35h7Mgs5VgLYeTV/65GNwjRMoFdLZgIYeDzPbKsuNBfJPZ19
+VvAvRY19MQG16Vy8GSgGu0fW8Bj32geIVKA5YOrqJ3Ny+BP43U9N0P6217qyqRMV
+9X+mA3PH9lgSNwDgV01R2blxj0FpIuJKTPacrdP8Smqal94l+tV7xA7GPSZArjLA
+pFvaDaECgYEA+l9uYYWKTmxJcSXIzsWpl3YOxJHacAz+/UpC2k+mvedSn6D9vlxq
+At0119nLF9YDcB7dCOGMuDUf89CfuofWtLo4EAlWID/jfXn4xPEQWcb3ivZT1TxP
+vEpGVpUX4trPJqaGXJiucxuvUD4Fc3HOkq3FwJrY84uwRse7szALJbMCgYEA30ua
+GNvI/NujFe3PArgCQep9lmECtGkFKNHNi0XjM4xiOdlWJYPt/pjaW4HyW3owsEK+
+OYwgIfZdAMb7K1PhQubvTkGIKWiIb7tNlFzPCRGv6k7tDi/iQNwZo2IEFhT3rRfk
+cgqTbcrP87QCpijwnYn5h0QOUAAUFSoCvCeV/FkCgYEAg1TVqLAMyXBB4eko+VVz
+zTAvNOsxAr++bYyrnqpTU5/oljUzhMwjC5ePq8bhooIvUXvPA96UGvg654DSmFyy
+wiBAUiEjnU0F/oaheGTe58jXhnwJo3u8c48ecEJKwkN2j9af+ihYsaafAl9WKqVS
+71vZtFtFXBM1Bxu0GJ0l68MCgYBq4Dy5eTkSDe5ZKKHUo04xTpMdzwEEaN/XUdQX
+vTOqEJ9TIPtiqWrYWUDqW6AsuKdlNgzmbnNSziBlptfBPTysUOxpgGQzrZzgHb5c
+LK/Ln3Obqns8Nx8L/E0pLljWWOLTLoRhMT6vZktyUc6SyTWhsdCFNcXD9MWn+5uj
+gy7+wQKBgEr7QTFPpj9B3cz39ILz8UoFxxaL4UhHutnvDW0oYWqxjz+qfywGYzLk
+IQ6AzWT+Yo484ayql9tVmHfvEYONBCLc+cdPu6CwSBDA3n0rGXVNjLT9ympN9qYe
+L+wf+s0oF7ymYTxyjT7s/9YLcgME1JaKdMrGyTH1cQdMoYM+6G6A
+-----END RSA PRIVATE KEY-----"
+WEBHOOK_SECRET=draingang
+BACKEND_URL=http://localhost:8000
+PORT=3000
+
+##🧩 Dependencies##
+Backend (backend/requirements.txt)
+fastapi >= 0.115.0
+pydantic >= 2.0.0
+uvicorn >= 0.30.0
+python-dotenv >= 1.0.0
+google-genai >= 0.3.0
+anyio >= 4.0.0
+
+##🚀 Running the System ##
+
+###Terminal 1 – Backend API###
+source venv/bin/activate   # Windows: venv\Scripts\activate
+cd backend
+uvicorn main:app --reload --port 8000
+
+Backend will run at: http://localhost:8000
 
 
-2. **Environment Setup**:
-Configure `.env` files in both `/backend` and `/probot-app` using the provided templates.
-3. **Launch with Docker**:
-```bash
-docker-compose up --build
+###Terminal 2 – Probot GitHub App###
+cd probot-app
+npm install
+npm run dev
 
-```
+This starts the GitHub App server on port 3000.
 
+###Terminal 3 – Webhook Forwarding (Smee)###
+npx smee-client \
+  --url https://smee.io/y6inAjkDY0kzhR7f \
+  --target http://localhost:3000/api/github/webhooks
 
+This forwards GitHub webhook events to your local Probot instance.
 
-### Deployment on Render
-
-1. Connect your GitHub repository to Render.
-2. Render will automatically detect the `render.yaml` file.
-3. Fill in the `PRIVATE_KEY` (copy-paste the full `.pem` file content) and API keys in the Render Dashboard.
-
----
-
-### 📄 License & Course Info
-
-This project was developed for the **CS453 - Advanced Software Engineering** course at **Bilkent University**.
