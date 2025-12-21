@@ -12,15 +12,20 @@ import sys
 import time
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 app = FastAPI()
 
 # ----------------------------
-# Database setup
+# Config
 # ----------------------------
 DB_PATH = os.getenv("PENDING_COMMENTS_DB", "./pending_comments.db")
+MAX_EXPIRY_SECONDS = int(os.getenv("MAX_COMMENT_EXPIRY_SECONDS", 24 * 60 * 60))
 
 
+# ----------------------------
+# Database setup
+# ----------------------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -37,6 +42,9 @@ def init_db():
             expires_at INTEGER NOT NULL
         )
         """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pending_expires ON pending_comments(expires_at)"
     )
     conn.commit()
     conn.close()
@@ -80,21 +88,23 @@ class ExpiredCommentsResponse(BaseModel):
 # ----------------------------
 # Helpers
 # ----------------------------
+def utc_now_ts() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
+
+
 def validate_expires_at(expires_at: int) -> None:
     """
-    Prevent obviously wrong expiry values.
-    - must be in the future
-    - must not exceed 24 hours
+    Validate expiry timestamp coming from the bot.
     """
-    now = int(time.time())
+    now = utc_now_ts()
 
     if expires_at < now:
         raise HTTPException(status_code=400, detail="expires_at must be in the future")
 
-    if expires_at > now + 24 * 60 * 60:
+    if expires_at > now + MAX_EXPIRY_SECONDS:
         raise HTTPException(
             status_code=400,
-            detail="expires_at cannot be more than 24 hours in the future",
+            detail=f"expires_at exceeds maximum allowed ({MAX_EXPIRY_SECONDS}s)",
         )
 
 
@@ -131,7 +141,7 @@ async def create_pending_comment(data: PendingCommentCreate):
 
 @app.get("/pending-comments/expired/list", response_model=ExpiredCommentsResponse)
 async def get_expired_comments():
-    now = int(time.time())
+    now = utc_now_ts()
 
     with get_db() as conn:
         cursor = conn.cursor()
