@@ -31,6 +31,25 @@ RETRY_MAX_DELAY_SEC = float(os.getenv("GEMINI_RETRY_MAX_DELAY", "2.0"))
 RETRY_MAX_ATTEMPTS = int(os.getenv("GEMINI_RETRY_MAX_ATTEMPTS", "12"))
 RETRY_JITTER_SEC = float(os.getenv("GEMINI_RETRY_JITTER_SEC", "0.10"))  # small jitter to avoid thundering herd
 
+def insertion_sort(arr):
+    """
+    Sorts the list `arr` in ascending order using insertion sort.
+    Time Complexity: O(n^2)
+    Space Complexity: O(1)
+    """
+    for i in range(1, len(arr)):
+        key = arr[i]
+        j = i - 1
+
+        # Move elements greater than key one position ahead
+        while j >= 0 and arr[j] > key:
+            arr[j + 1] = arr[j]
+            j -= 1
+
+        arr[j + 1] = key
+
+    return arr
+
 
 # ----------------------------
 # Payload models
