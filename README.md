@@ -17,11 +17,14 @@ The system is designed to **reduce back-and-forth in PR discussions**, improve r
 
 ### Backend (`backend/.env`)###
 GEMINI_API_KEY="AIxxxxx"
+
 GEMINI_MODEL="gemini-2.5-flash-lite"
+
 PENDING_COMMENTS_DB=./pending_comments.db
 
 ### Frontend (`probot-app/.env`)###
 APP_ID=2453186
+
 PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
 MIIEowIBAAKCAQEA2mMR0gIy0pdvENobMEQ37SMquuM95kt59AsxbE8D1jIOb3Ik
 gvr+LHKnhltZ9osCCi87w7Ui2OPrv29IgDs+qrtKwITMebZ/sQrpKhB8CIr7NFNN
@@ -49,17 +52,26 @@ gy7+wQKBgEr7QTFPpj9B3cz39ILz8UoFxxaL4UhHutnvDW0oYWqxjz+qfywGYzLk
 IQ6AzWT+Yo484ayql9tVmHfvEYONBCLc+cdPu6CwSBDA3n0rGXVNjLT9ympN9qYe
 L+wf+s0oF7ymYTxyjT7s/9YLcgME1JaKdMrGyTH1cQdMoYM+6G6A
 -----END RSA PRIVATE KEY-----"
+
 WEBHOOK_SECRET=draingang
+
 BACKEND_URL=http://localhost:8000
+
 PORT=3000
 
 ##🧩 Dependencies##
 Backend (backend/requirements.txt)
+
 fastapi >= 0.115.0
+
 pydantic >= 2.0.0
+
 uvicorn >= 0.30.0
+
 python-dotenv >= 1.0.0
+
 google-genai >= 0.3.0
+
 anyio >= 4.0.0
 
 ##🚀 Running the System ##
