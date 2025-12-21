@@ -39,6 +39,14 @@ function generateMessageCode() {
 }
 
 // ----------------------------
+// Wizard command detection
+// ----------------------------
+function isWizardReviewCommand(commentBody) {
+  const trimmed = (commentBody || "").trim();
+  return trimmed === "/wizard-review" || trimmed.startsWith("/wizard-review ");
+}
+
+// ----------------------------
 // Comment footer with message code
 // ----------------------------
 function addMessageCodeFooter(commentBody, messageCode) {
@@ -373,6 +381,36 @@ async function buildIssueCommentPayload(context) {
   };
 }
 
+async function buildWizardReviewPayload(context, pr, repo) {
+  const owner = repo.owner.login;
+  const repoName = repo.name;
+  const prNumber = pr.number;
+  
+  const files = await getPrFiles(context, owner, repoName, prNumber);
+  
+  return {
+    kind: "wizard_review_command",
+    review_body: null,
+    review_state: null,
+    comment_body: "/wizard-review",
+    comment_path: null,
+    comment_diff_hunk: null,
+    comment_position: null,
+    comment_id: null,
+    reviewer_login: context.payload.sender?.login,
+    pr_number: prNumber,
+    pr_title: pr.title,
+    pr_body: pr.body,
+    pr_author_login: pr.user && pr.user.login,
+    repo_full_name: repo.full_name,
+    repo_owner: owner,
+    repo_name: repoName,
+    files,
+    review_comments: null,
+    inline_comment_count: 0
+  };
+}
+
 // ----------------------------
 // Command parser
 // ----------------------------
@@ -496,26 +534,66 @@ module.exports = (app) => {
       if (isFromBot(context)) return;
 
       const commentBody = (context.payload.comment.body || "").trim();
-      const isWizardCmd = commentBody.startsWith("/wizard-review");
-
+      
+      // Check for wizard command in inline comment
+      if (isWizardReviewCommand(commentBody)) {
+        console.log("🧙‍♂️ Detected /wizard-review in inline comment");
+        
+        const repo = context.payload.repository;
+        const pr = context.payload.pull_request;
+        
+        const payloadForBackend = await buildWizardReviewPayload(context, pr, repo);
+        
+        const replyBody = await callBackend(context, payloadForBackend);
+        if (!replyBody) return;
+        
+        const messageCode = generateMessageCode();
+        const fullReplyBody = addMessageCodeFooter(replyBody, messageCode);
+        
+        const owner = repo.owner.login;
+        const repoName = repo.name;
+        const prNumber = pr.number;
+        
+        // Reply to the inline comment that triggered wizard
+        const postedComment = await replyToInlineComment(
+          context,
+          owner,
+          repoName,
+          prNumber,
+          context.payload.comment.id,
+          fullReplyBody
+        );
+        
+        const expiresAt = Math.floor(Date.now() / 1000) + (COMMENT_EXPIRY_MINUTES * 60);
+        await storePendingComment(context, {
+          code: messageCode,
+          comment_id: postedComment.id,
+          comment_type: "inline",
+          owner,
+          repo: repoName,
+          pr_number: prNumber,
+          installation_id: context.payload.installation.id,
+          expires_at: expiresAt
+        });
+        
+        context.log.info({ messageCode }, "🧙‍♂️ Posted inline wizard review");
+        return;
+      }
+      
+      // Regular inline comment processing
       const payloadForBackend = await buildReviewCommentPayload(context);
       if (!payloadForBackend) return;
-
-      if (isWizardCmd) {
-        console.log("Detected /wizard-review command in inline comment");
-        payloadForBackend.kind = "wizard_review_command";
-      }
-
+      
       const replyBody = await callBackend(context, payloadForBackend);
       if (!replyBody) return;
-
+      
       const messageCode = generateMessageCode();
       const fullReplyBody = addMessageCodeFooter(replyBody, messageCode);
-
+      
       const owner = payloadForBackend.repo_owner;
       const repoName = payloadForBackend.repo_name;
       const prNumber = payloadForBackend.pr_number;
-
+      
       const postedComment = await replyToInlineComment(
         context,
         owner,
@@ -524,7 +602,7 @@ module.exports = (app) => {
         context.payload.comment.id,
         fullReplyBody
       );
-
+      
       const expiresAt = Math.floor(Date.now() / 1000) + (COMMENT_EXPIRY_MINUTES * 60);
       await storePendingComment(context, {
         code: messageCode,
@@ -536,8 +614,9 @@ module.exports = (app) => {
         installation_id: context.payload.installation.id,
         expires_at: expiresAt
       });
-
-      context.log.info({ messageCode, commentId: postedComment.id }, "Posted inline comment with message code");
+      
+      context.log.info({ messageCode }, "Posted inline comment reply");
+      
     } catch (err) {
       context.log.error({ err }, "Error in pull_request_review_comment.created");
     }
@@ -625,95 +704,148 @@ module.exports = (app) => {
     try {
       console.log("=== Received issue_comment.created event ===");
       console.log("Comment body:", context.payload.comment.body);
-      console.log("Sender:", context.payload.sender?.login);
       
       if (isFromBot(context)) {
         console.log("Skipping: comment is from bot");
         return;
       }
 
-      const commentBody = context.payload.comment.body;
+      const commentBody = context.payload.comment.body || "";
       const parsed = parseCommand(commentBody);
 
-      console.log("Parsed command:", parsed);
-
-      // Check if it's a command first
+      // 1. Handle /accept and /reject commands
       if (parsed) {
-        // Handle /accept and /reject commands
-        context.log.info({ command: parsed.command, code: parsed.code }, "Received command");
-
+        context.log.info({ command: parsed.command, code: parsed.code }, "Processing command");
+        
         const pendingComment = await lookupPendingComment(context, parsed.code);
         
-        console.log("Lookup result:", pendingComment);
-        
         if (!pendingComment) {
-          context.log.info({ code: parsed.code }, "Code not found or already processed");
-          console.log("❌ Code not found in database");
+          context.log.info({ code: parsed.code }, "Code not found or expired");
           return;
         }
 
-        const { comment_id, comment_type, owner, repo, pr_number } = pendingComment;
-        console.log(`Found comment: id=${comment_id}, type=${comment_type}`);
-
+        const { comment_id, comment_type, owner, repo } = pendingComment;
         const commandCommentId = context.payload.comment.id;
 
         if (parsed.command === "accept") {
           await deletePendingComment(context, parsed.code);
-          context.log.info({ code: parsed.code, commentId: comment_id }, "Accepted - comment kept");
-          console.log("✅ ACCEPTED - Comment kept, removed from tracking");
+          context.log.info({ code: parsed.code }, "✅ Comment accepted and kept");
           
+          // Delete the /accept command itself
           await deleteThreadComment(context, owner, repo, commandCommentId);
-          console.log(`🗑️ Deleted command comment ${commandCommentId}`);
           
         } else if (parsed.command === "reject") {
-          console.log(`Attempting to delete ${comment_type} comment ${comment_id}...`);
-          let deleted = false;
+          // Delete the AI comment
           if (comment_type === "inline") {
-            deleted = await deleteInlineComment(context, owner, repo, comment_id);
+            await deleteInlineComment(context, owner, repo, comment_id);
           } else {
-            deleted = await deleteThreadComment(context, owner, repo, comment_id);
+            await deleteThreadComment(context, owner, repo, comment_id);
           }
-
+          
           await deletePendingComment(context, parsed.code);
+          context.log.info({ code: parsed.code }, "✅ Comment rejected and deleted");
           
-          if (deleted) {
-            context.log.info({ code: parsed.code, commentId: comment_id }, "Rejected - comment deleted");
-            console.log("✅ REJECTED - Comment deleted successfully");
-          } else {
-            context.log.warn({ code: parsed.code, commentId: comment_id }, "Rejected but deletion failed");
-            console.log("⚠️ REJECTED - Deletion failed (might be already deleted)");
-          }
-          
+          // Delete the /reject command itself
           await deleteThreadComment(context, owner, repo, commandCommentId);
-          console.log(`🗑️ Deleted command comment ${commandCommentId}`);
         }
-        return; // Exit after handling command
+        return;
       }
 
-      // Not a command - treat as regular conversation comment
-      console.log("Not a command - processing as regular conversation comment");
+      // 2. Check if it's a /wizard-review command
+      if (isWizardReviewCommand(commentBody)) {
+        console.log("🧙‍♂️ Detected /wizard-review command");
+        
+        const issue = context.payload.issue;
+        const repo = context.payload.repository;
+        
+        // Verify this is a PR
+        if (!issue.pull_request) {
+          context.log.info("Wizard command on regular issue, skipping");
+          return;
+        }
+        
+        // Fetch full PR details
+        const owner = repo.owner.login;
+        const repoName = repo.name;
+        const prNumber = issue.number;
+        
+        const prResponse = await context.octokit.pulls.get({
+          owner,
+          repo: repoName,
+          pull_number: prNumber
+        });
+        const pr = prResponse.data;
+        
+        // Build wizard payload
+        const payloadForBackend = await buildWizardReviewPayload(context, pr, repo);
+        
+        // Call backend for wizard review
+        const replyBody = await callBackend(context, payloadForBackend);
+        if (!replyBody) {
+          context.log.error("Wizard review returned no response");
+          return;
+        }
+        
+        // Add message code footer for accept/reject
+        const messageCode = generateMessageCode();
+        const fullReplyBody = addMessageCodeFooter(replyBody, messageCode);
+        
+        // Post the wizard review as a thread comment
+        const postedComment = await replyToPrThread(
+          context,
+          owner,
+          repoName,
+          prNumber,
+          fullReplyBody
+        );
+        
+        // Store as pending comment
+        const expiresAt = Math.floor(Date.now() / 1000) + (COMMENT_EXPIRY_MINUTES * 60);
+        await storePendingComment(context, {
+          code: messageCode,
+          comment_id: postedComment.id,
+          comment_type: "thread",
+          owner,
+          repo: repoName,
+          pr_number: prNumber,
+          installation_id: context.payload.installation.id,
+          expires_at: expiresAt
+        });
+        
+        context.log.info({ 
+          messageCode, 
+          commentId: postedComment.id, 
+          prNumber 
+        }, "🧙‍♂️ Posted wizard review with message code");
+        
+        return;
+      }
 
-      // Check for /wizard-review command
-      const isWizardCmd = commentBody.trim().startsWith("/wizard-review");
-
+      // 3. Regular conversation comment (not a command)
+      console.log("Processing as regular conversation comment");
+      
+      const issue = context.payload.issue;
+      const repo = context.payload.repository;
+      
+      // Check if this is a PR
+      if (!issue.pull_request) {
+        context.log.info("Comment is on regular issue, skipping");
+        return;
+      }
+      
       const payloadForBackend = await buildIssueCommentPayload(context);
       if (!payloadForBackend) return;
-
-      if (isWizardCmd) {
-        console.log("Detected /wizard-review command in conversation comment");
-        payloadForBackend.kind = "wizard_review_command";
-      }
-
+      
       const replyBody = await callBackend(context, payloadForBackend);
       if (!replyBody) return;
-
+      
       const messageCode = generateMessageCode();
       const fullReplyBody = addMessageCodeFooter(replyBody, messageCode);
-
+      
       const owner = payloadForBackend.repo_owner;
       const repoName = payloadForBackend.repo_name;
       const prNumber = payloadForBackend.pr_number;
-
+      
       const postedComment = await replyToPrThread(
         context,
         owner,
@@ -721,7 +853,7 @@ module.exports = (app) => {
         prNumber,
         fullReplyBody
       );
-
+      
       const expiresAt = Math.floor(Date.now() / 1000) + (COMMENT_EXPIRY_MINUTES * 60);
       await storePendingComment(context, {
         code: messageCode,
@@ -733,13 +865,15 @@ module.exports = (app) => {
         installation_id: context.payload.installation.id,
         expires_at: expiresAt
       });
-
-      context.log.info({ messageCode, commentId: postedComment.id, prNumber }, "Posted conversation comment reply with message code");
-      console.log(`✅ Posted reply to conversation comment with code ${messageCode}`);
-
+      
+      context.log.info({ 
+        messageCode, 
+        commentId: postedComment.id 
+      }, "Posted conversation reply with message code");
+      
     } catch (err) {
-      context.log.error({ err }, "Error handling issue_comment.created");
-      console.error("❌ ERROR in issue_comment handler:", err);
+      context.log.error({ err }, "Error in issue_comment.created handler");
+      console.error("❌ ERROR:", err);
     }
   });
 };

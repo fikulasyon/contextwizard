@@ -88,9 +88,6 @@ class ReviewCommentInfo(BaseModel):
     original_line: Optional[int] = None
     user_login: Optional[str] = None
 
-# backend/main.py - Update ReviewPayload model
-# Replace the existing ReviewPayload class with this:
-
 class ReviewPayload(BaseModel):
     kind: str
     review_body: Optional[str] = None
@@ -110,7 +107,7 @@ class ReviewPayload(BaseModel):
     repo_name: Optional[str] = None
     files: Optional[List[FileInfo]] = None
     review_comments: Optional[List[ReviewCommentInfo]] = None
-    inline_comment_count: Optional[int] = 0  # Add this field
+    inline_comment_count: Optional[int] = 0
 
 class BackendResponse(BaseModel):
     comment: str
@@ -126,7 +123,7 @@ class PendingComment(BaseModel):
     repo: str
     pr_number: int
     installation_id: int
-    expires_at: int  # Unix timestamp
+    expires_at: int
 
 class PendingCommentCreate(BaseModel):
     code: str
@@ -281,6 +278,7 @@ def clip(s: Optional[str], n: int) -> str:
     if not s:
         return ""
     return s if len(s) <= n else s[:n] + "\n…(truncated)…"
+
 def build_llm_context(payload: ReviewPayload) -> str:
     pr_title = payload.pr_title or ""
     pr_body = clip(payload.pr_body, 1200)
@@ -328,8 +326,15 @@ State: {payload.review_state}
 Review body: {clip(review_text, 2000)}
 """.rstrip()
     
+    elif payload.kind == "wizard_review_command":
+        base += f"""
+
+Event: Autonomous wizard review requested
+Requester: {payload.reviewer_login}
+Task: Perform comprehensive code review of all changes
+""".rstrip()
+    
     else:
-        # Fallback for other kinds (like wizard_review_command)
         comment_text = payload.comment_body or payload.review_body or ""
         if comment_text:
             base += f"""
@@ -359,172 +364,6 @@ Comment: {clip(comment_text, 1500)}
 
     return base.strip()
 
-
-# 2. Update classify_with_gemini system instructions:
-def classify_with_gemini(payload: ReviewPayload) -> Classification:
-    client = get_client()
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-    system_instructions = """
-You are a code review assistant that classifies GitHub PR comments into exactly ONE category.
-
-You will receive comments from THREE different contexts:
-1. Inline review comments (tied to specific code lines)
-2. PR conversation comments (general comments on the PR)
-3. Review summaries (submitted reviews)
-
-Decision priority:
-1) Determine intent: praise / question / request change
-2) Determine clarity: good / bad
-
-Categories: PRAISE, GOOD_CHANGE, BAD_CHANGE, GOOD_QUESTION, BAD_QUESTION, UNKNOWN
-
-Rules:
-- PRAISE: positive feedback, appreciation, acknowledgment (e.g., "nice work", "LGTM", "looks good")
-- GOOD_CHANGE: clear, actionable change request with sufficient context
-- BAD_CHANGE: unclear/underspecified change request (missing details like which file, which function, what exactly to change)
-- GOOD_QUESTION: clear question with enough context to understand what's being asked
-- BAD_QUESTION: unclear question (vague, missing context, ambiguous)
-- UNKNOWN: intent cannot be determined with confidence
-
-Important:
-- "bad" = unclear/underspecified (NOT rude or negative tone)
-- needs_reply = true ONLY for: GOOD_CHANGE, BAD_CHANGE, BAD_QUESTION
-- needs_clarification = true ONLY for: BAD_CHANGE, BAD_QUESTION
-- For conversation comments without specific code context, be more lenient in classification
-- Single word comments like "wow", "nice", "thanks" should be PRAISE
-- Questions about "why", "how", "what" are questions, not change requests
-- Requests with words like "can you", "please add", "should we" are change requests
-
-Return ONLY valid JSON for the schema.
-""".strip()
-
-    ctx = build_llm_context(payload)
-
-    def _call():
-        resp = client.models.generate_content(
-            model=model,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[types.Part(text=f"{system_instructions}\n\nCONTEXT:\n{ctx}")],
-                )
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=Classification,
-                temperature=0.2,
-            ),
-        )
-        data = getattr(resp, "parsed", None)
-        if data is None:
-            data = json.loads(resp.text)
-        return Classification.model_validate(data)
-
-    return gemini_call_with_retry("classify_with_gemini", _call)
-
-
-# 3. Update the main endpoint to handle issue_comment properly:
-@app.post("/analyze-review", response_model=BackendResponse)
-async def analyze_review(payload: ReviewPayload):
-    print(f"Processing kind: {payload.kind} for PR #{payload.pr_number}", file=sys.stderr)
-
-    if payload.kind == "wizard_review_command":
-        try:
-            suggestions = await anyio.to_thread.run_sync(run_wizard_full_review, payload)
-            return BackendResponse(comment=f"🧙‍♂️ **Wizard Review Suggestions**\n\n{suggestions}")
-        except Exception as e:
-            return BackendResponse(comment=f"❌ Error during Wizard Review: {str(e)[:100]}")
-
-    print("==== Incoming payload ====", file=sys.stderr)
-    try:
-        print(json.dumps(payload.model_dump(), indent=2), file=sys.stderr)
-    except Exception:
-        print(json.dumps(payload.dict(), indent=2), file=sys.stderr)
-    print("==========================", file=sys.stderr)
-
-    # 1) Classify
-    print("Classifying with Gemini...", file=sys.stderr)
-    try:
-        cls = await anyio.to_thread.run_sync(classify_with_gemini, payload)
-        print(f"Classification result: category={cls.category}, confidence={cls.confidence}, reason={cls.short_reason}", file=sys.stderr)
-    except Exception as e:
-        cls = Classification(
-            category="UNKNOWN",
-            needs_reply=True,
-            needs_clarification=False,
-            confidence=0.0,
-            short_reason=f"Gemini classification failed: {type(e).__name__}: {str(e)[:160]}",
-        )
-        return BackendResponse(comment=format_debug_comment(payload, cls))
-
-    # Valid kinds for processing
-    if payload.kind not in ("review_comment", "review", "issue_comment"):
-        return BackendResponse(comment=format_debug_comment(payload, cls))
-
-    # 2) PRAISE -> just return debug comment (no action needed)
-    if cls.category == "PRAISE":
-        print("Detected PRAISE category - returning debug comment", file=sys.stderr)
-        return BackendResponse(comment=format_debug_comment(payload, cls))
-
-    # 3) GOOD_CHANGE -> strict short code suggestion
-    if cls.category == "GOOD_CHANGE" and cls.confidence >= 0.7:
-        print("Generating good change with Gemini...", file=sys.stderr)
-        try:
-            suggestion_block = await anyio.to_thread.run_sync(generate_code_suggestion, payload, cls, None)
-            return BackendResponse(comment=suggestion_block)
-        except Exception as e:
-            fallback = Classification(
-                category="UNKNOWN",
-                needs_reply=True,
-                needs_clarification=False,
-                confidence=0.0,
-                short_reason=f"Suggestion generation failed: {type(e).__name__}: {str(e)[:160]}",
-            )
-            return BackendResponse(comment=format_debug_comment(payload, fallback))
-
-    # 4) BAD_QUESTION -> clarified question message
-    if cls.category == "BAD_QUESTION" and cls.confidence >= 0.55:
-        print("Clarifying bad question with Gemini...", file=sys.stderr)
-        try:
-            cq = await anyio.to_thread.run_sync(clarify_bad_question, payload, cls)
-            return BackendResponse(comment=format_clarification_question_comment(payload, cls, cq))
-        except Exception as e:
-            fallback = Classification(
-                category="UNKNOWN",
-                needs_reply=True,
-                needs_clarification=False,
-                confidence=0.0,
-                short_reason=f"Question clarification failed: {type(e).__name__}: {str(e)[:160]}",
-            )
-            return BackendResponse(comment=format_debug_comment(payload, fallback))
-
-    # 5) BAD_CHANGE -> clarify -> code suggestion
-    if cls.category == "BAD_CHANGE" and cls.confidence >= 0.55:
-        print("Clarifying bad change and generating suggestion with Gemini...", file=sys.stderr)
-        try:
-            cc = await anyio.to_thread.run_sync(clarify_bad_change, payload, cls)
-            suggestion_block = await anyio.to_thread.run_sync(
-                generate_code_suggestion, payload, cls, cc.clarified_request,
-            )
-            body = format_bad_change_with_suggestion_comment(cls, cc.clarified_request, suggestion_block)
-            return BackendResponse(comment=body)
-        except Exception as e:
-            fallback = Classification(
-                category="UNKNOWN",
-                needs_reply=True,
-                needs_clarification=False,
-                confidence=0.0,
-                short_reason=f"BAD_CHANGE clarification/suggestion failed: {type(e).__name__}: {str(e)[:160]}",
-            )
-            return BackendResponse(comment=format_debug_comment(payload, fallback))
-
-    # 6) GOOD_QUESTION -> For now just return debug, but you could answer it
-    if cls.category == "GOOD_QUESTION":
-        print("Detected GOOD_QUESTION - returning debug comment", file=sys.stderr)
-        return BackendResponse(comment=format_debug_comment(payload, cls))
-
-    # 7) Default: classification debug comment
-    return BackendResponse(comment=format_debug_comment(payload, cls))
 def extract_first_fenced_code_block(text: str) -> str:
     if not text:
         return "```diff\n```"
@@ -593,19 +432,35 @@ def classify_with_gemini(payload: ReviewPayload) -> Classification:
     client = get_client()
     model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     system_instructions = """
-You are a code review assistant that classifies a GitHub PR inline review comment into exactly ONE category.
+You are a code review assistant that classifies GitHub PR comments into exactly ONE category.
+
+You will receive comments from THREE different contexts:
+1. Inline review comments (tied to specific code lines)
+2. PR conversation comments (general comments on the PR)
+3. Review summaries (submitted reviews)
 
 Decision priority:
 1) Determine intent: praise / question / request change
 2) Determine clarity: good / bad
 
-Categories: PRAISE, GOOD_CHANGE, BAD_CHANGE, GOOD_QUESTION, BAD_QUESTION
+Categories: PRAISE, GOOD_CHANGE, BAD_CHANGE, GOOD_QUESTION, BAD_QUESTION, UNKNOWN
 
 Rules:
-- "bad" = unclear/underspecified (not rude)
-- needs_reply true ONLY for: GOOD_CHANGE, BAD_CHANGE, BAD_QUESTION
-- needs_clarification true ONLY for: BAD_CHANGE, BAD_QUESTION
-- Unknown intent -> UNKNOWN with low confidence
+- PRAISE: positive feedback, appreciation, acknowledgment (e.g., "nice work", "LGTM", "looks good")
+- GOOD_CHANGE: clear, actionable change request with sufficient context
+- BAD_CHANGE: unclear/underspecified change request (missing details like which file, which function, what exactly to change)
+- GOOD_QUESTION: clear question with enough context to understand what's being asked
+- BAD_QUESTION: unclear question (vague, missing context, ambiguous)
+- UNKNOWN: intent cannot be determined with confidence
+
+Important:
+- "bad" = unclear/underspecified (NOT rude or negative tone)
+- needs_reply = true ONLY for: GOOD_CHANGE, BAD_CHANGE, BAD_QUESTION
+- needs_clarification = true ONLY for: BAD_CHANGE, BAD_QUESTION
+- For conversation comments without specific code context, be more lenient in classification
+- Single word comments like "wow", "nice", "thanks" should be PRAISE
+- Questions about "why", "how", "what" are questions, not change requests
+- Requests with words like "can you", "please add", "should we" are change requests
 
 Return ONLY valid JSON for the schema.
 """.strip()
@@ -757,19 +612,40 @@ Return ONLY the single fenced code block now.
     return gemini_call_with_retry("generate_code_suggestion", _call)
 
 def run_wizard_full_review(payload: ReviewPayload) -> str:
+    """
+    Autonomous code review using Gemini.
+    Returns formatted markdown with issues found.
+    """
     client = get_client()
     model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    
     system_instructions = """
-You are the 'ContextWizard' AI Reviewer. Your goal is to perform an autonomous code review of the provided changes.
+You are the 'ContextWizard' AI Reviewer performing an autonomous code review.
+
+Your task:
+1. Analyze the provided PR diff hunks and changed files
+2. Identify potential issues in these categories:
+   - Bugs or logic errors
+   - Security vulnerabilities
+   - Performance problems
+   - Code quality issues
+   - Best practice violations
+
+Output format (use markdown):
+For each issue found, provide:
+
+### [Issue Title]
+**Severity**: High/Medium/Low
+**Description**: Clear explanation of the problem and why it matters
+**Suggestion**: Specific actionable fix
 
 Rules:
-1. Analyze the Diff Hunks and Changed Files provided in the context.
-2. Identify bugs, security risks, or performance issues.
-3. For each issue, provide:
-   - ### [TITLE]: A short, descriptive title of the problem.
-   - **Description**: A clear explanation of what is wrong and how to fix it.
-4. Be concise and professional.
-"""
+- Be concise but thorough
+- Focus on real issues, not style preferences
+- Provide specific line references when possible
+- If no issues found, say "No significant issues detected"
+- Maximum 5 issues per review to stay focused
+""".strip()
 
     ctx = build_llm_context(payload)
 
@@ -779,12 +655,18 @@ Rules:
             contents=[
                 types.Content(
                     role="user",
-                    parts=[types.Part(text=f"{system_instructions}\n\nCONTEXT:\n{ctx}")]
+                    parts=[types.Part(text=f"{system_instructions}\n\n{ctx}")]
                 )
             ],
-            config=types.GenerateContentConfig(temperature=0.3),
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=2048
+            ),
         )
-        return resp.text
+        result = (resp.text or "").strip()
+        if not result:
+            return "✅ No significant issues detected in this PR."
+        return result
 
     return gemini_call_with_retry("wizard_review", _call)
 
@@ -847,22 +729,30 @@ def format_bad_change_with_suggestion_comment(
 # ----------------------------
 # FastAPI route
 # ----------------------------
-# backend/main.py - Add these debug statements to the analyze_review endpoint
-# Replace your analyze_review function with this version:
-
 @app.post("/analyze-review", response_model=BackendResponse)
 async def analyze_review(payload: ReviewPayload):
-    print(f"[DEBUG] 1. Starting analyze_review - kind: {payload.kind} for PR #{payload.pr_number}", file=sys.stderr)
+    print(f"[DEBUG] Processing kind: {payload.kind} for PR #{payload.pr_number}", file=sys.stderr)
 
+    # Handle wizard review command - this gets full review
     if payload.kind == "wizard_review_command":
-        print("[DEBUG] 2a. Processing wizard_review_command", file=sys.stderr)
+        print("[DEBUG] Running wizard autonomous review", file=sys.stderr)
         try:
             suggestions = await anyio.to_thread.run_sync(run_wizard_full_review, payload)
-            return BackendResponse(comment=f"🧙‍♂️ **Wizard Review Suggestions**\n\n{suggestions}")
-        except Exception as e:
-            return BackendResponse(comment=f"❌ Error during Wizard Review: {str(e)[:100]}")
+            
+            # Format the wizard review nicely
+            wizard_output = f"""🧙‍♂️ **ContextWizard Autonomous Review**
 
-    print("[DEBUG] 2b. Not wizard command, continuing...", file=sys.stderr)
+{suggestions}
+
+---
+_This is an AI-generated code review. Please verify all suggestions before applying._"""
+            
+            return BackendResponse(comment=wizard_output)
+        except Exception as e:
+            error_msg = f"❌ **Wizard Review Error**\n\nFailed to complete autonomous review: {str(e)[:200]}"
+            print(f"[ERROR] Wizard review failed: {str(e)}", file=sys.stderr)
+            return BackendResponse(comment=error_msg)
+
     print("==== Incoming payload ====", file=sys.stderr)
     try:
         print(json.dumps(payload.model_dump(), indent=2), file=sys.stderr)
@@ -872,102 +762,81 @@ async def analyze_review(payload: ReviewPayload):
 
     # Skip reviews with inline comments (they'll be handled individually)
     if payload.kind == "review" and payload.inline_comment_count and payload.inline_comment_count > 0:
-        print(f"[DEBUG] 3. Skipping review with {payload.inline_comment_count} inline comments", file=sys.stderr)
-        return BackendResponse(comment="")  # Return empty to skip posting
+        print(f"[DEBUG] Skipping review with {payload.inline_comment_count} inline comments", file=sys.stderr)
+        return BackendResponse(comment="")
 
-    print("[DEBUG] 4. About to classify with Gemini...", file=sys.stderr)
-    # 1) Classify
+    # Classification and processing for non-wizard reviews
+    print("[DEBUG] Classifying with Gemini...", file=sys.stderr)
     try:
-        print("[DEBUG] 4a. Calling classify_with_gemini...", file=sys.stderr)
         cls = await anyio.to_thread.run_sync(classify_with_gemini, payload)
-        print(f"[DEBUG] 4b. Classification result: category={cls.category}, confidence={cls.confidence}, reason={cls.short_reason}", file=sys.stderr)
+        print(f"[DEBUG] Classification: {cls.category} (confidence={cls.confidence})", file=sys.stderr)
     except Exception as e:
-        print(f"[DEBUG] 4c. Classification FAILED: {type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
+        print(f"[DEBUG] Classification failed: {str(e)[:200]}", file=sys.stderr)
         cls = Classification(
             category="UNKNOWN",
             needs_reply=True,
             needs_clarification=False,
             confidence=0.0,
-            short_reason=f"Gemini classification failed: {type(e).__name__}: {str(e)[:160]}",
+            short_reason=f"Classification failed: {type(e).__name__}",
         )
         return BackendResponse(comment=format_debug_comment(payload, cls))
 
-    # Valid kinds for processing
+    # Validate payload kind
     if payload.kind not in ("review_comment", "review", "issue_comment"):
-        print(f"[DEBUG] 5. Invalid kind '{payload.kind}', returning debug comment", file=sys.stderr)
+        print(f"[DEBUG] Invalid kind '{payload.kind}'", file=sys.stderr)
         return BackendResponse(comment=format_debug_comment(payload, cls))
 
-    print(f"[DEBUG] 6. Processing category: {cls.category}", file=sys.stderr)
-
-    # 2) PRAISE -> just return debug comment (no action needed)
+    # Process based on classification
     if cls.category == "PRAISE":
-        print("[DEBUG] 7a. Detected PRAISE category - returning debug comment", file=sys.stderr)
         return BackendResponse(comment=format_debug_comment(payload, cls))
 
-    # 3) GOOD_CHANGE -> strict short code suggestion
     if cls.category == "GOOD_CHANGE" and cls.confidence >= 0.7:
-        print("[DEBUG] 7b. Generating good change with Gemini...", file=sys.stderr)
         try:
             suggestion_block = await anyio.to_thread.run_sync(generate_code_suggestion, payload, cls, None)
-            print("[DEBUG] 7b-done. Code suggestion generated successfully", file=sys.stderr)
             return BackendResponse(comment=suggestion_block)
         except Exception as e:
-            print(f"[DEBUG] 7b-error. Suggestion generation failed: {str(e)[:200]}", file=sys.stderr)
             fallback = Classification(
                 category="UNKNOWN",
                 needs_reply=True,
                 needs_clarification=False,
                 confidence=0.0,
-                short_reason=f"Suggestion generation failed: {type(e).__name__}: {str(e)[:160]}",
+                short_reason=f"Suggestion generation failed: {str(e)[:160]}",
             )
             return BackendResponse(comment=format_debug_comment(payload, fallback))
 
-    # 4) BAD_QUESTION -> clarified question message
     if cls.category == "BAD_QUESTION" and cls.confidence >= 0.55:
-        print("[DEBUG] 7c. Clarifying bad question with Gemini...", file=sys.stderr)
         try:
             cq = await anyio.to_thread.run_sync(clarify_bad_question, payload, cls)
-            print("[DEBUG] 7c-done. Question clarified successfully", file=sys.stderr)
             return BackendResponse(comment=format_clarification_question_comment(payload, cls, cq))
         except Exception as e:
-            print(f"[DEBUG] 7c-error. Question clarification failed: {str(e)[:200]}", file=sys.stderr)
             fallback = Classification(
                 category="UNKNOWN",
                 needs_reply=True,
                 needs_clarification=False,
                 confidence=0.0,
-                short_reason=f"Question clarification failed: {type(e).__name__}: {str(e)[:160]}",
+                short_reason=f"Question clarification failed: {str(e)[:160]}",
             )
             return BackendResponse(comment=format_debug_comment(payload, fallback))
 
-    # 5) BAD_CHANGE -> clarify -> code suggestion
     if cls.category == "BAD_CHANGE" and cls.confidence >= 0.55:
-        print("[DEBUG] 7d. Clarifying bad change and generating suggestion with Gemini...", file=sys.stderr)
         try:
             cc = await anyio.to_thread.run_sync(clarify_bad_change, payload, cls)
-            print("[DEBUG] 7d-1. Change clarified, now generating suggestion...", file=sys.stderr)
             suggestion_block = await anyio.to_thread.run_sync(
                 generate_code_suggestion, payload, cls, cc.clarified_request,
             )
-            print("[DEBUG] 7d-done. Bad change processed successfully", file=sys.stderr)
             body = format_bad_change_with_suggestion_comment(cls, cc.clarified_request, suggestion_block)
             return BackendResponse(comment=body)
         except Exception as e:
-            print(f"[DEBUG] 7d-error. BAD_CHANGE processing failed: {str(e)[:200]}", file=sys.stderr)
             fallback = Classification(
                 category="UNKNOWN",
                 needs_reply=True,
                 needs_clarification=False,
                 confidence=0.0,
-                short_reason=f"BAD_CHANGE clarification/suggestion failed: {type(e).__name__}: {str(e)[:160]}",
+                short_reason=f"BAD_CHANGE processing failed: {str(e)[:160]}",
             )
             return BackendResponse(comment=format_debug_comment(payload, fallback))
 
-    # 6) GOOD_QUESTION -> For now just return debug, but you could answer it
     if cls.category == "GOOD_QUESTION":
-        print("[DEBUG] 7e. Detected GOOD_QUESTION - returning debug comment", file=sys.stderr)
         return BackendResponse(comment=format_debug_comment(payload, cls))
 
-    # 7) Default: classification debug comment
-    print("[DEBUG] 8. Falling back to default debug comment", file=sys.stderr)
     return BackendResponse(comment=format_debug_comment(payload, cls))
