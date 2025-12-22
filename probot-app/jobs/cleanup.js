@@ -5,7 +5,7 @@ const { getBackendUrl, CLEANUP_INTERVAL_MS } = require('../config/constants');
 async function cleanupExpiredComments(app) {
   try {
     console.log("[cleanup] Running cleanup job...");
-    
+
     const backendUrl = getBackendUrl();
     if (!backendUrl) {
       console.error("[cleanup] BACKEND_URL not set");
@@ -13,10 +13,10 @@ async function cleanupExpiredComments(app) {
     }
 
     const res = await axios.get(`${backendUrl}/pending-comments/expired/list`, {
-      timeout: 10_000
+      timeout: 30_000
     });
     const expired = res.data.expired_comments || [];
-    
+
     if (expired.length === 0) {
       console.log("[cleanup] No expired comments found");
       return;
@@ -26,10 +26,10 @@ async function cleanupExpiredComments(app) {
 
     for (const item of expired) {
       console.log(`[cleanup] Processing expired comment: code=${item.code}, id=${item.comment_id}`);
-      
+
       try {
         const octokit = await app.auth(item.installation_id);
-        
+
         let deleted = false;
         if (item.comment_type === "inline") {
           try {
