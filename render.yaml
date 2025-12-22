@@ -21,7 +21,7 @@ services:
     name: contextwizard-probot
     runtime: docker
     repo: https://github.com/fikulasyon/contextwizard
-    branch: clean-code+deploy
+    branch: main
     rootDir: probot-app
     plan: free
     region: frankfurt
