@@ -1,17 +1,20 @@
 // config/constants.js
 module.exports = {
-  COMMENT_EXPIRY_MINUTES: 2, // Demo: 2 minutes for quick testing
-  CLEANUP_INTERVAL_MS: 60 * 1000, // Check every 60 seconds
+  COMMENT_EXPIRY_MINUTES: 2,
+  CLEANUP_INTERVAL_MS: 60 * 1000,
 
   getBackendUrl: () => {
-    const rawUrl = process.env.BACKEND_URL;
+    let baseUrl = process.env.BACKEND_URL;
 
-    if (!rawUrl) {
-      context.log.error("BACKEND_URL is not set in environment variables");
+    if (!baseUrl) {
+      console.error("BACKEND_URL is not set in environment variables");
       return null;
     }
-    const protocol = rawUrl.includes('onrender.com') ? 'https://' : 'http://';
-    let baseUrl = rawUrl.startsWith('http') ? rawUrl : `${protocol}${rawUrl}`;
+
+    if (!baseUrl.startsWith('http')) {
+      baseUrl = `https://${baseUrl}`;
+    }
+
     if (baseUrl.endsWith('/')) {
       baseUrl = baseUrl.slice(0, -1);
     }
