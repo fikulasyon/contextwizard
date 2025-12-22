@@ -3,7 +3,7 @@ services:
     name: contextwizard-backend
     runtime: docker
     repo: https://github.com/fikulasyon/contextwizard
-    branch: clean-code+deploy
+    branch: main
     rootDir: backend
     plan: free
     region: frankfurt
