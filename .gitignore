@@ -2,6 +2,7 @@
 backend/venv/
 backend/__pycache__/
 backend/.env
+backend/pending_comments.db
 *.pyc
 
 # Node
