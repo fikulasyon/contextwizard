@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    restart: always
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=gemini-2.0-flash
+    ports:
+      - "8000:8000"
+
+  probot:
+    build: ./probot-app
+    restart: always
+    depends_on:
+      - backend
+    environment:
+      - APP_ID=${APP_ID}
+      - PRIVATE_KEY=${PRIVATE_KEY}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - BACKEND_URL=http://backend:8000/analyze-review
+    ports:
+      - "3000:3000"

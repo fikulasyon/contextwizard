@@ -19,6 +19,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
+@app.get("/")
+async def root():
+    return {"message": "ContextWizard Backend is running"}
+
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
