@@ -17,7 +17,6 @@ async function callBackend(context, payloadForBackend) {
   try {
     const res = await axios.post(`${backendUrl}/analyze-review`, payloadForBackend, {
       headers: { "Content-Type": "application/json" },
-      timeout: 30_000
     });
 
     const commentBody = res?.data?.comment;
@@ -39,8 +38,7 @@ async function storePendingComment(context, data) {
 
   try {
     await axios.post(`${backendUrl}/pending-comments`, data, {
-      headers: { "Content-Type": "application/json" },
-      timeout: 5_000
+      headers: { "Content-Type": "application/json" }
     });
     context.log.info({ code: data.code }, "Stored pending comment");
     return true;
@@ -55,9 +53,7 @@ async function lookupPendingComment(context, code) {
   if (!backendUrl) return null;
 
   try {
-    const res = await axios.get(`${backendUrl}/pending-comments/${code}`, {
-      timeout: 5_000
-    });
+    const res = await axios.get(`${backendUrl}/pending-comments/${code}`);
     return res.data;
   } catch (err) {
     if (err.response && err.response.status === 404) {
@@ -73,9 +69,7 @@ async function deletePendingComment(context, code) {
   if (!backendUrl) return false;
 
   try {
-    await axios.delete(`${backendUrl}/pending-comments/${code}`, {
-      timeout: 5_000
-    });
+    await axios.delete(`${backendUrl}/pending-comments/${code}`);
     context.log.info({ code }, "Deleted pending comment from storage");
     return true;
   } catch (err) {
@@ -89,9 +83,7 @@ async function getExpiredComments() {
   if (!backendUrl) return [];
 
   try {
-    const res = await axios.get(`${backendUrl}/pending-comments/expired/list`, {
-      timeout: 10_000
-    });
+    const res = await axios.get(`${backendUrl}/pending-comments/expired/list`);
     return res.data.expired_comments || [];
   } catch (err) {
     console.error("[backend-api] Error fetching expired comments:", err.message);

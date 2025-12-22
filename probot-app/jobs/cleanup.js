@@ -12,9 +12,7 @@ async function cleanupExpiredComments(app) {
       return;
     }
 
-    const res = await axios.get(`${backendUrl}/pending-comments/expired/list`, {
-      timeout: 30_000
-    });
+    const res = await axios.get(`${backendUrl}/pending-comments/expired/list`);
     const expired = res.data.expired_comments || [];
 
     if (expired.length === 0) {
@@ -58,9 +56,7 @@ async function cleanupExpiredComments(app) {
         }
 
         try {
-          await axios.delete(`${backendUrl}/pending-comments/${item.code}`, {
-            timeout: 5_000
-          });
+          await axios.delete(`${backendUrl}/pending-comments/${item.code}`);
           console.log(`[cleanup] Removed ${item.code} from storage`);
         } catch (err) {
           console.error(`[cleanup] Error removing ${item.code} from storage:`, err.message);
