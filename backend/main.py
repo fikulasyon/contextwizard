@@ -11,6 +11,8 @@ from fastapi import FastAPI
 from database.connection import init_db
 from routes.analyze import router as analyze_router
 from routes.pending_comments import router as pending_comments_router
+import os
+import uvicorn
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -32,3 +34,7 @@ async def startup_event():
 # Register routers
 app.include_router(analyze_router)
 app.include_router(pending_comments_router)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
